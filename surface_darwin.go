@@ -23,5 +23,5 @@ func (w *Window) CreateSurface(backend gpu.Backend) (uintptr, error) {
 	if !ok {
 		return 0, errors.New("gamekit: backend cannot create a macOS window surface")
 	}
-	return surfacer.CreateMetalSurface(unsafe.Pointer(w.NativeHandle())), nil
+	return surfacer.CreateMetalSurface(unsafe.Pointer(w.GetNativeHandle())), nil
 }

@@ -136,7 +136,7 @@ func (w *Window) SetShouldClose(close bool) {
 }
 
 // Size returns the native window's drawable client size in logical pixels.
-func (w *Window) Size() (width, height int) {
+func (w *Window) GetSize() (width, height int) {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowSize(native)
 	}
@@ -144,7 +144,7 @@ func (w *Window) Size() (width, height int) {
 }
 
 // FramebufferSize returns the drawable size in physical pixels.
-func (w *Window) FramebufferSize() (width, height int) {
+func (w *Window) GetFramebufferSize() (width, height int) {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowFramebufferSize(native)
 	}
@@ -161,8 +161,8 @@ func (w *Window) SetTitle(title string) {
 	}
 }
 
-// Title returns the last title assigned through GameKit.
-func (w *Window) Title() string {
+// GetTitle returns the last title assigned through GameKit.
+func (w *Window) GetTitle() string {
 	if w == nil {
 		return ""
 	}
@@ -173,7 +173,7 @@ func (w *Window) Title() string {
 
 // NativeHandle returns NSWindow*, X11 Window, or HWND depending on the platform.
 // Prefer CreateSurface unless integrating another native API.
-func (w *Window) NativeHandle() uintptr {
+func (w *Window) GetNativeHandle() uintptr {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowHandle(native)
 	}
@@ -181,7 +181,7 @@ func (w *Window) NativeHandle() uintptr {
 }
 
 // NativeDisplay returns the X11 Display* on Linux and nil on other platforms.
-func (w *Window) NativeDisplay() unsafe.Pointer {
+func (w *Window) GetNativeDisplay() unsafe.Pointer {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowDisplay(native)
 	}

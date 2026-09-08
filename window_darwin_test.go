@@ -26,10 +26,10 @@ func TestNativeCocoaWindow(t *testing.T) {
 	if cocoaTestWindowError != nil {
 		t.Fatal(cocoaTestWindowError)
 	}
-	if cocoaTestWindow.NativeHandle() == 0 {
+	if cocoaTestWindow.GetNativeHandle() == 0 {
 		t.Fatal("native NSWindow handle is missing")
 	}
-	if width, height := cocoaTestWindow.Size(); width != 320 || height != 200 {
+	if width, height := cocoaTestWindow.GetSize(); width != 320 || height != 200 {
 		t.Fatalf("window size = %dx%d, want 320x200", width, height)
 	}
 	x, y := cocoaTestWindow.GetPointerPos()
