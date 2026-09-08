@@ -29,6 +29,8 @@ typedef struct {
        the window centre on every motion event, and asking the server each time would
        be a round trip per event. */
     int width, height;
+    /* runtime/cgo Handle for the Go *Window; see gkWindowSetHandle. */
+    uintptr_t handle;
 } GKWindowNative;
 
 static void gkSetError(char *error, size_t size, const char *message) {

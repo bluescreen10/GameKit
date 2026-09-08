@@ -22,6 +22,8 @@ typedef struct {
     int haveLast;
     /* A high surrogate awaiting its pair; WM_CHAR delivers UTF-16 one unit at a time. */
     unsigned int highSurrogate;
+    /* runtime/cgo Handle for the Go *Window; see gkWindowSetHandle. */
+    uintptr_t handle;
 } GKWindowNative;
 
 static const wchar_t *gkWindowClass = L"gamekitNativeWindow";

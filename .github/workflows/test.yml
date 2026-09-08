@@ -8,8 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  mesa-vulkan:
-    name: Mesa lavapipe
+  linux:
+    name: Linux
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -44,5 +44,91 @@ jobs:
       - name: Verify lavapipe
         run: vulkaninfo --summary
 
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # The no-cgo build compiles the *_unsupported.go stubs, which every real platform
+      # excludes by build tag — so nothing else here ever compiles them.
+      - name: Build and vet without cgo
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build ./...
+          go vet ./...
+
+      # xvfb supplies the X display the window and input code needs; without it every
+      # X11 path fails at XOpenDisplay rather than being tested.
       - name: Test
         run: xvfb-run -a go test ./... -count=1 -v
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Cocoa needs a WindowServer connection to create a window at all, which the
+      # hosted macOS runners have. Metal is present natively, so the gpu tests run here
+      # rather than skipping.
+      - name: Test
+        run: go test ./... -count=1 -v
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # cgo needs a C toolchain; the hosted image ships mingw-w64. Fail loudly here
+      # rather than inside an opaque cgo build error.
+      - name: Verify the C toolchain
+        run: gcc --version
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # No Vulkan driver is present, so no backend registers and the gpu tests skip
+      # themselves. What this job covers is the Win32 window and input code, which is
+      # otherwise compiled nowhere.
+      - name: Test
+        run: go test ./... -count=1 -v
