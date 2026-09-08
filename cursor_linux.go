@@ -7,9 +7,9 @@ package gamekit
 */
 import "C"
 
-// GetCursorPos returns the cursor in logical pixels relative to the top-left
+// GetPointerPos returns the cursor in logical pixels relative to the top-left
 // corner of the window's content area.
-func (w *Window) GetCursorPos() (x, y float64) {
+func (w *Window) GetPointerPos() (x, y float64) {
 	if native := w.nativePointer(); native != nil {
 		var nativeX, nativeY C.double
 		C.gkWindowCursorPosition(native, &nativeX, &nativeY)

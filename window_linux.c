@@ -14,8 +14,21 @@ typedef struct {
     Window window;
     Colormap colormap;
     Atom deleteWindow;
+    Cursor blankCursor;
     int shouldClose;
     unsigned char keys[GK_KEY_COUNT];
+    unsigned char buttons[GK_POINTER_BUTTON_COUNT];
+    double scrollX, scrollY;
+    int cursorMode;
+    /* Virtual cursor position, accumulated from deltas while the cursor is disabled,
+       plus the last real position the deltas are measured against. */
+    double virtualX, virtualY;
+    int lastX, lastY;
+    int haveLast;
+    /* Cached client size, refreshed from ConfigureNotify. Recentring the pointer needs
+       the window centre on every motion event, and asking the server each time would
+       be a round trip per event. */
+    int width, height;
 } GKWindowNative;
 
 static void gkSetError(char *error, size_t size, const char *message) {
@@ -154,10 +167,81 @@ void *gkWindowCreate(const char *title, int width, int height, uint32_t flags,
 void gkWindowDestroy(void *pointer) {
     if (!pointer) return;
     GKWindowNative *native = pointer;
+    /* A pointer grab outlives the window and would lock up the desktop. */
+    XUngrabPointer(native->display, CurrentTime);
+    if (native->blankCursor) XFreeCursor(native->display, native->blankCursor);
     XDestroyWindow(native->display, native->window);
     if (native->colormap) XFreeColormap(native->display, native->colormap);
     XCloseDisplay(native->display);
     free(native);
+}
+
+/* Translate X11's modifier state mask into GameKit's portable bitmask. */
+static int gkX11Mods(unsigned int state) {
+    int mods = 0;
+    if (state & ShiftMask) mods |= GK_MOD_SHIFT;
+    if (state & ControlMask) mods |= GK_MOD_CONTROL;
+    if (state & Mod1Mask) mods |= GK_MOD_ALT;
+    if (state & Mod4Mask) mods |= GK_MOD_SUPER;
+    if (state & LockMask) mods |= GK_MOD_CAPS_LOCK;
+    if (state & Mod2Mask) mods |= GK_MOD_NUM_LOCK;
+    return mods;
+}
+
+/* A 1x1 fully transparent cursor, which is how X11 hides one. */
+static Cursor gkX11BlankCursor(Display *display, Window window) {
+    static const char bits[] = {0};
+    XColor black = {0};
+    Pixmap pixmap = XCreateBitmapFromData(display, window, bits, 1, 1);
+    if (!pixmap) return None;
+    Cursor cursor = XCreatePixmapCursor(display, pixmap, pixmap, &black, &black, 0, 0);
+    XFreePixmap(display, pixmap);
+    return cursor;
+}
+
+static void gkX11RefreshSize(GKWindowNative *native) {
+    XWindowAttributes attributes;
+    XGetWindowAttributes(native->display, native->window, &attributes);
+    native->width = attributes.width;
+    native->height = attributes.height;
+}
+
+static void gkX11WarpToCentre(GKWindowNative *native) {
+    if (native->width <= 0 || native->height <= 0) gkX11RefreshSize(native);
+    int cx = native->width / 2;
+    int cy = native->height / 2;
+    XWarpPointer(native->display, None, native->window, 0, 0, 0, 0, cx, cy);
+    /* The warp itself arrives as a MotionNotify at the centre; recording the centre as
+       the last position makes that event's delta zero, so it contributes nothing. */
+    native->lastX = cx;
+    native->lastY = cy;
+    native->haveLast = 1;
+}
+
+static void gkApplyCursorMode(GKWindowNative *native) {
+    if (!native) return;
+    if (native->cursorMode == GK_CURSOR_NORMAL) {
+        XUndefineCursor(native->display, native->window);
+        XUngrabPointer(native->display, CurrentTime);
+    } else {
+        if (!native->blankCursor) {
+            native->blankCursor = gkX11BlankCursor(native->display, native->window);
+        }
+        if (native->blankCursor) {
+            XDefineCursor(native->display, native->window, native->blankCursor);
+        }
+        if (native->cursorMode == GK_CURSOR_DISABLED) {
+            /* Grabbing confines the pointer to the window, so it cannot reach a screen
+               edge and stop generating motion. Recentring below does the rest. */
+            XGrabPointer(native->display, native->window, True,
+                         ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                         GrabModeAsync, GrabModeAsync, native->window, None, CurrentTime);
+            gkX11WarpToCentre(native);
+        } else {
+            XUngrabPointer(native->display, CurrentTime);
+        }
+    }
+    XFlush(native->display);
 }
 
 void gkWindowPoll(void *pointer) {
@@ -171,15 +255,119 @@ void gkWindowPoll(void *pointer) {
             native->shouldClose = 1;
         } else if (event.type == DestroyNotify) {
             native->shouldClose = 1;
+        } else if (event.type == ConfigureNotify) {
+            native->width = event.xconfigure.width;
+            native->height = event.xconfigure.height;
         } else if (event.type == KeyPress || event.type == KeyRelease) {
             int key = gkX11Key(XLookupKeysym(&event.xkey, 0));
+            int mods = gkX11Mods(event.xkey.state);
             if (key >= 0 && key < GK_KEY_COUNT) {
-                if (event.type == KeyRelease) native->keys[key] = GK_KEY_RELEASED;
-                else native->keys[key] = native->keys[key] == GK_KEY_RELEASED
-                    ? GK_KEY_PRESSED : GK_KEY_REPEAT;
+                int action;
+                if (event.type == KeyRelease) {
+                    action = GK_KEY_RELEASED;
+                } else {
+                    action = native->keys[key] == GK_KEY_RELEASED ? GK_KEY_PRESSED : GK_KEY_REPEAT;
+                }
+                native->keys[key] = (unsigned char)action;
+                gkGoKeyEvent(native->handle, key, (int)event.xkey.keycode, action, mods);
+            }
+            /* Text is resolved separately: XLookupString applies the keyboard layout,
+               shift state and any compose sequence, none of which the keysym above
+               carries. */
+            if (event.type == KeyPress) {
+                char buffer[32];
+                KeySym ignored;
+                int n = XLookupString(&event.xkey, buffer, (int)sizeof(buffer), &ignored, NULL);
+                for (int i = 0; i < n; i++) {
+                    unsigned char c = (unsigned char)buffer[i];
+                    if (c < 0x20 || c == 0x7F) continue; /* control codes are not text */
+                    gkGoCharEvent(native->handle, c);
+                }
+            }
+        } else if (event.type == ButtonPress || event.type == ButtonRelease) {
+            int mods = gkX11Mods(event.xbutton.state);
+            unsigned int b = event.xbutton.button;
+            /* X11 reports the wheel as buttons 4-7 rather than as an axis. Turn those
+               back into scroll and never surface them as buttons. */
+            if (b >= 4 && b <= 7) {
+                if (event.type == ButtonPress) {
+                    double dx = 0, dy = 0;
+                    if (b == 4) dy = 1;
+                    else if (b == 5) dy = -1;
+                    else if (b == 6) dx = -1;
+                    else dx = 1;
+                    native->scrollX += dx;
+                    native->scrollY += dy;
+                    gkGoScrollEvent(native->handle, dx, dy);
+                }
+            } else {
+                /* X11 numbers left/middle/right as 1/2/3; GameKit uses 0/1/2 with
+                   middle last. */
+                int button = -1;
+                if (b == 1) button = GK_POINTER_BUTTON_LEFT;
+                else if (b == 2) button = GK_POINTER_BUTTON_MIDDLE;
+                else if (b == 3) button = GK_POINTER_BUTTON_RIGHT;
+                else if (b >= 8) button = (int)b - 5; /* 8,9 -> 3,4 */
+                if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
+                    int action = event.type == ButtonPress ? GK_POINTER_PRESSED : GK_POINTER_RELEASED;
+                    native->buttons[button] = (unsigned char)action;
+                    gkGoPointerButtonEvent(native->handle, button, action, mods);
+                }
+            }
+        } else if (event.type == MotionNotify) {
+            if (native->cursorMode == GK_CURSOR_DISABLED) {
+                if (native->haveLast) {
+                    native->virtualX += event.xmotion.x - native->lastX;
+                    native->virtualY += event.xmotion.y - native->lastY;
+                }
+                native->lastX = event.xmotion.x;
+                native->lastY = event.xmotion.y;
+                native->haveLast = 1;
+                /* Recentre once the pointer drifts far enough that it might reach the
+                   window edge, where motion would stop. */
+                if (native->width > 0 && native->height > 0) {
+                    int cx = native->width / 2, cy = native->height / 2;
+                    if (abs(event.xmotion.x - cx) > native->width / 4 ||
+                        abs(event.xmotion.y - cy) > native->height / 4) {
+                        gkX11WarpToCentre(native);
+                    }
+                }
             }
         }
     }
+}
+
+void gkWindowSetHandle(void *pointer, uintptr_t handle) {
+    if (pointer) ((GKWindowNative *)pointer)->handle = handle;
+}
+
+int gkWindowGetPointerButton(void *pointer, int button) {
+    if (!pointer || button < 0 || button >= GK_POINTER_BUTTON_COUNT) return GK_POINTER_RELEASED;
+    return ((GKWindowNative *)pointer)->buttons[button];
+}
+
+void gkWindowGetScroll(void *pointer, double *x, double *y) {
+    GKWindowNative *native = pointer;
+    if (x) *x = native ? native->scrollX : 0.0;
+    if (y) *y = native ? native->scrollY : 0.0;
+}
+
+void gkWindowSetCursorMode(void *pointer, int mode) {
+    GKWindowNative *native = pointer;
+    if (!native || native->cursorMode == mode) return;
+    if (mode == GK_CURSOR_DISABLED) {
+        double x = 0, y = 0;
+        gkWindowCursorPosition(pointer, &x, &y);
+        native->virtualX = x;
+        native->virtualY = y;
+        native->haveLast = 0;
+    }
+    native->cursorMode = mode;
+    gkApplyCursorMode(native);
+}
+
+int gkWindowGetCursorMode(void *pointer) {
+    return pointer ? ((GKWindowNative *)pointer)->cursorMode : GK_CURSOR_NORMAL;
 }
 
 int gkWindowShouldClose(void *pointer) {
@@ -218,6 +406,12 @@ void *gkWindowNativeDisplay(void *pointer) {
 
 void gkWindowCursorPosition(void *pointer, double *x, double *y) {
     GKWindowNative *native = pointer;
+    if (native->cursorMode == GK_CURSOR_DISABLED) {
+        /* The pointer is grabbed and recentred; report accumulated motion instead. */
+        if (x) *x = native->virtualX;
+        if (y) *y = native->virtualY;
+        return;
+    }
     Window root, child;
     int rootX, rootY, windowX = 0, windowY = 0;
     unsigned int mask;

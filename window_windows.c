@@ -3,6 +3,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <windowsx.h> /* GET_X_LPARAM / GET_Y_LPARAM */
 #include "window_bridge.h"
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,16 @@ typedef struct {
     HWND window;
     int shouldClose;
     unsigned char keys[GK_KEY_COUNT];
+    unsigned char buttons[GK_POINTER_BUTTON_COUNT];
+    double scrollX, scrollY;
+    int cursorMode;
+    /* Virtual cursor position, accumulated from deltas while the cursor is disabled,
+       plus the last real position the deltas are measured against. */
+    double virtualX, virtualY;
+    int lastX, lastY;
+    int haveLast;
+    /* A high surrogate awaiting its pair; WM_CHAR delivers UTF-16 one unit at a time. */
+    unsigned int highSurrogate;
 } GKWindowNative;
 
 static const wchar_t *gkWindowClass = L"gamekitNativeWindow";
@@ -67,6 +78,67 @@ static int gkWinKey(WPARAM value, LPARAM details) {
     }
 }
 
+/* Read the modifier keys into GameKit's portable bitmask. Win32 reports them as
+   global key state rather than per-message, unlike X11 and Cocoa. */
+static int gkWinMods(void) {
+    int mods = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= GK_MOD_SHIFT;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= GK_MOD_CONTROL;
+    if (GetKeyState(VK_MENU) & 0x8000) mods |= GK_MOD_ALT;
+    if ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) mods |= GK_MOD_SUPER;
+    if (GetKeyState(VK_CAPITAL) & 1) mods |= GK_MOD_CAPS_LOCK;
+    if (GetKeyState(VK_NUMLOCK) & 1) mods |= GK_MOD_NUM_LOCK;
+    return mods;
+}
+
+static void gkWinCentre(GKWindowNative *native, int *outX, int *outY) {
+    RECT rect;
+    GetClientRect(native->window, &rect);
+    int cx = (rect.right - rect.left) / 2;
+    int cy = (rect.bottom - rect.top) / 2;
+    if (outX) *outX = cx;
+    if (outY) *outY = cy;
+}
+
+static void gkWinWarpToCentre(GKWindowNative *native) {
+    int cx, cy;
+    gkWinCentre(native, &cx, &cy);
+    POINT point = {cx, cy};
+    ClientToScreen(native->window, &point);
+    SetCursorPos(point.x, point.y);
+    native->lastX = cx;
+    native->lastY = cy;
+    native->haveLast = 1;
+}
+
+static void gkApplyCursorMode(GKWindowNative *native) {
+    if (!native) return;
+    if (native->cursorMode == GK_CURSOR_NORMAL) {
+        ClipCursor(NULL);
+        ReleaseCapture();
+        while (ShowCursor(TRUE) < 0) {}
+    } else {
+        while (ShowCursor(FALSE) >= 0) {}
+        if (native->cursorMode == GK_CURSOR_DISABLED) {
+            /* Confine the cursor to the window so it cannot reach a screen edge and
+               stop producing motion; recentring below does the rest. */
+            RECT rect;
+            GetClientRect(native->window, &rect);
+            POINT topLeft = {rect.left, rect.top};
+            POINT bottomRight = {rect.right, rect.bottom};
+            ClientToScreen(native->window, &topLeft);
+            ClientToScreen(native->window, &bottomRight);
+            RECT screen = {topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
+            ClipCursor(&screen);
+            SetCapture(native->window);
+            gkWinWarpToCentre(native);
+        } else {
+            ClipCursor(NULL);
+            ReleaseCapture();
+        }
+    }
+}
+
 static LRESULT CALLBACK gkWindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     GKWindowNative *native = (GKWindowNative *)GetWindowLongPtrW(window, GWLP_USERDATA);
     if (message == WM_NCCREATE) {
@@ -84,12 +156,94 @@ static LRESULT CALLBACK gkWindowProc(HWND window, UINT message, WPARAM wparam, L
                message == WM_KEYUP || message == WM_SYSKEYUP) {
         int key = gkWinKey(wparam, lparam);
         if (native && key >= 0 && key < GK_KEY_COUNT) {
+            int action;
             if (message == WM_KEYUP || message == WM_SYSKEYUP) {
-                native->keys[key] = GK_KEY_RELEASED;
+                action = GK_KEY_RELEASED;
             } else {
-                native->keys[key] = (lparam & (1l << 30)) ? GK_KEY_REPEAT : GK_KEY_PRESSED;
+                action = (lparam & (1l << 30)) ? GK_KEY_REPEAT : GK_KEY_PRESSED;
+            }
+            native->keys[key] = (unsigned char)action;
+            gkGoKeyEvent(native->handle, key, (int)((lparam >> 16) & 0xFF), action, gkWinMods());
+        }
+    } else if (message == WM_CHAR || message == WM_SYSCHAR) {
+        /* WM_CHAR carries text already resolved through the layout and any dead key,
+           delivered as UTF-16 — so a non-BMP character arrives as two messages. */
+        if (native) {
+            unsigned int unit = (unsigned int)wparam;
+            if (unit >= 0xD800 && unit <= 0xDBFF) {
+                native->highSurrogate = unit;
+            } else {
+                unsigned int codepoint = unit;
+                if (unit >= 0xDC00 && unit <= 0xDFFF && native->highSurrogate) {
+                    codepoint = 0x10000 + ((native->highSurrogate - 0xD800) << 10) +
+                                (unit - 0xDC00);
+                }
+                native->highSurrogate = 0;
+                if (codepoint >= 0x20 && codepoint != 0x7F) {
+                    gkGoCharEvent(native->handle, codepoint);
+                }
             }
         }
+        return 0;
+    } else if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP ||
+               message == WM_RBUTTONDOWN || message == WM_RBUTTONUP ||
+               message == WM_MBUTTONDOWN || message == WM_MBUTTONUP ||
+               message == WM_XBUTTONDOWN || message == WM_XBUTTONUP) {
+        if (native) {
+            int button = -1, action = GK_POINTER_RELEASED;
+            switch (message) {
+                case WM_LBUTTONDOWN: button = GK_POINTER_BUTTON_LEFT; action = GK_POINTER_PRESSED; break;
+                case WM_LBUTTONUP:   button = GK_POINTER_BUTTON_LEFT; break;
+                case WM_RBUTTONDOWN: button = GK_POINTER_BUTTON_RIGHT; action = GK_POINTER_PRESSED; break;
+                case WM_RBUTTONUP:   button = GK_POINTER_BUTTON_RIGHT; break;
+                case WM_MBUTTONDOWN: button = GK_POINTER_BUTTON_MIDDLE; action = GK_POINTER_PRESSED; break;
+                case WM_MBUTTONUP:   button = GK_POINTER_BUTTON_MIDDLE; break;
+                case WM_XBUTTONDOWN: action = GK_POINTER_PRESSED; /* fallthrough */
+                case WM_XBUTTONUP:
+                    button = GET_XBUTTON_WPARAM(wparam) == XBUTTON1 ? 3 : 4;
+                    break;
+            }
+            if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
+                native->buttons[button] = (unsigned char)action;
+                gkGoPointerButtonEvent(native->handle, button, action, gkWinMods());
+            }
+        }
+        if (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP) return TRUE;
+        return 0;
+    } else if (message == WM_MOUSEWHEEL || message == WM_MOUSEHWHEEL) {
+        if (native) {
+            double delta = (double)GET_WHEEL_DELTA_WPARAM(wparam) / (double)WHEEL_DELTA;
+            double dx = 0, dy = 0;
+            if (message == WM_MOUSEWHEEL) dy = delta;
+            else dx = delta;
+            native->scrollX += dx;
+            native->scrollY += dy;
+            gkGoScrollEvent(native->handle, dx, dy);
+        }
+        return 0;
+    } else if (message == WM_MOUSEMOVE) {
+        if (native && native->cursorMode == GK_CURSOR_DISABLED) {
+            int x = GET_X_LPARAM(lparam);
+            int y = GET_Y_LPARAM(lparam);
+            if (native->haveLast) {
+                native->virtualX += x - native->lastX;
+                native->virtualY += y - native->lastY;
+            }
+            native->lastX = x;
+            native->lastY = y;
+            native->haveLast = 1;
+            /* Recentre once the cursor drifts far enough that it might reach the edge
+               of the window, where motion would stop. */
+            RECT rect;
+            GetClientRect(native->window, &rect);
+            int cx = (rect.right - rect.left) / 2;
+            int cy = (rect.bottom - rect.top) / 2;
+            if (abs(x - cx) > (rect.right - rect.left) / 4 ||
+                abs(y - cy) > (rect.bottom - rect.top) / 4) {
+                gkWinWarpToCentre(native);
+            }
+        }
+        return 0;
     }
     return DefWindowProcW(window, message, wparam, lparam);
 }
@@ -151,6 +305,12 @@ void *gkWindowCreate(const char *title, int width, int height, uint32_t flags,
 void gkWindowDestroy(void *pointer) {
     if (!pointer) return;
     GKWindowNative *native = pointer;
+    /* A clip region or hidden cursor outlives the window and would affect the whole
+       desktop. */
+    if (native->cursorMode != GK_CURSOR_NORMAL) {
+        native->cursorMode = GK_CURSOR_NORMAL;
+        gkApplyCursorMode(native);
+    }
     if (native->window) DestroyWindow(native->window);
     free(native);
 }
@@ -202,8 +362,14 @@ void *gkWindowNativeDisplay(void *pointer) {
 
 void gkWindowCursorPosition(void *pointer, double *x, double *y) {
     GKWindowNative *native = pointer;
+    if (native->cursorMode == GK_CURSOR_DISABLED) {
+        /* The cursor is clipped and recentred; report accumulated motion instead. */
+        if (x) *x = native->virtualX;
+        if (y) *y = native->virtualY;
+        return;
+    }
     POINT point = {0};
-    GetCursorPos(&point);
+    GetPointerPos(&point);
     ScreenToClient(native->window, &point);
     if (x) *x = (double)point.x;
     if (y) *y = (double)point.y;
@@ -212,4 +378,37 @@ void gkWindowCursorPosition(void *pointer, double *x, double *y) {
 int gkWindowGetKey(void *pointer, int key) {
     if (!pointer || key < 0 || key >= GK_KEY_COUNT) return GK_KEY_RELEASED;
     return ((GKWindowNative *)pointer)->keys[key];
+}
+
+void gkWindowSetHandle(void *pointer, uintptr_t handle) {
+    if (pointer) ((GKWindowNative *)pointer)->handle = handle;
+}
+
+int gkWindowGetPointerButton(void *pointer, int button) {
+    if (!pointer || button < 0 || button >= GK_POINTER_BUTTON_COUNT) return GK_POINTER_RELEASED;
+    return ((GKWindowNative *)pointer)->buttons[button];
+}
+
+void gkWindowGetScroll(void *pointer, double *x, double *y) {
+    GKWindowNative *native = pointer;
+    if (x) *x = native ? native->scrollX : 0.0;
+    if (y) *y = native ? native->scrollY : 0.0;
+}
+
+void gkWindowSetCursorMode(void *pointer, int mode) {
+    GKWindowNative *native = pointer;
+    if (!native || native->cursorMode == mode) return;
+    if (mode == GK_CURSOR_DISABLED) {
+        double x = 0, y = 0;
+        gkWindowCursorPosition(pointer, &x, &y);
+        native->virtualX = x;
+        native->virtualY = y;
+        native->haveLast = 0;
+    }
+    native->cursorMode = mode;
+    gkApplyCursorMode(native);
+}
+
+int gkWindowGetCursorMode(void *pointer) {
+    return pointer ? ((GKWindowNative *)pointer)->cursorMode : GK_CURSOR_NORMAL;
 }

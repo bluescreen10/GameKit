@@ -17,7 +17,7 @@ func TestCreateWindowRejectsInvalidSize(t *testing.T) {
 
 func TestZeroWindowCursorPosition(t *testing.T) {
 	window := &Window{}
-	if x, y := window.GetCursorPos(); x != 0 || y != 0 {
+	if x, y := window.GetPointerPos(); x != 0 || y != 0 {
 		t.Fatalf("zero window cursor position = (%v, %v), want (0, 0)", x, y)
 	}
 }

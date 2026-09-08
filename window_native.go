@@ -81,3 +81,7 @@ func nativeWindowHandle(native unsafe.Pointer) uintptr {
 func nativeWindowDisplay(native unsafe.Pointer) unsafe.Pointer {
 	return C.gkWindowNativeDisplay(native)
 }
+
+func setNativeWindowHandle(native unsafe.Pointer, handle uintptr) {
+	C.gkWindowSetHandle(native, C.uintptr_t(handle))
+}

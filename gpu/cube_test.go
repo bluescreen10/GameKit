@@ -21,7 +21,7 @@ type meshRoot struct {
 }
 
 // TestCube renders a transformed, depth-tested indexed cube through the gpu —
-// the core of GameKit's mesh rendering (camera+model transform, index buffer, depth).
+// the core of gamekit's mesh rendering (camera+model transform, index buffer, depth).
 func TestCube(t *testing.T) {
 	b := testBackend(t)
 

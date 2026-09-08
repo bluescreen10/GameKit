@@ -86,15 +86,16 @@ static NSString *str(const void *s) {return s ? [NSString stringWithUTF8String:s
 static MBResource *resource(MBDevice *b,uint64_t h,NSUInteger kind) {
  MBResource *r=b.resources[@(h)]; require(r && (!kind || r.kind==kind),@"invalid resource handle or kind"); return r;
 }
-static uint64_t add(MBDevice *b,id obj,NSUInteger kind) {
+static uint64_t addWithResidency(MBDevice *b,id obj,NSUInteger kind,BOOL resident) {
  require(obj!=nil,@"Metal resource creation failed"); MBResource *r=[MBResource new]; r.object=obj; r.kind=kind;
  uint64_t h=++b.next; b.resources[@(h)]=r; [r release];
- if(kind==1||kind==2) {
+ if(resident && (kind==1||kind==2)) {
   [b.residentResources addObject:obj];
   b.residencyDirty=YES;
  }
  return h;
 }
+static uint64_t add(MBDevice *b,id obj,NSUInteger kind) { return addWithResidency(b,obj,kind,YES); }
 static MTLPixelFormat format(uint64_t f) {
  static const MTLPixelFormat fs[]={MTLPixelFormatInvalid,MTLPixelFormatR8Unorm,MTLPixelFormatRG8Unorm,MTLPixelFormatRGBA8Unorm,MTLPixelFormatRGBA8Unorm_sRGB,MTLPixelFormatBGRA8Unorm,MTLPixelFormatBGRA8Unorm_sRGB,MTLPixelFormatRG16Float,MTLPixelFormatRGBA16Float,MTLPixelFormatR32Float,MTLPixelFormatRGBA32Float,MTLPixelFormatRGB10A2Unorm,MTLPixelFormatDepth32Float,MTLPixelFormatDepth24Unorm_Stencil8};
  require(f<sizeof(fs)/sizeof(fs[0]),@"unknown texture format"); return fs[f];
@@ -411,11 +412,14 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
   if(u[3]) {u[1]=l.drawableSize.width;u[2]=l.drawableSize.height;} else {require(!r.auxiliary,@"cannot resize with an acquired drawable"); l.drawableSize=CGSizeMake(u[1],u[2]);} return 0;
  }
  case MBAcquire: {
-  MBResource *r=resource(b,u[0],6); require(!r.auxiliary,@"drawable already acquired"); id<CAMetalDrawable> d=[(CAMetalLayer*)r.object nextDrawable]; require(d!=nil,@"no drawable available (window hidden or zero size)"); r.auxiliary=d; uint64_t h=add(b,d.texture,2); r.slot=h; return h;
+  MBResource *r=resource(b,u[0],6); require(!r.auxiliary,@"drawable already acquired"); id<CAMetalDrawable> d=[(CAMetalLayer*)r.object nextDrawable]; require(d!=nil,@"no drawable available (window hidden or zero size)"); r.auxiliary=d;
+  // A drawable is used only as a render attachment; it is never referenced through
+  // a bindless argument table. Keeping it out of residentResources prevents its
+  // acquire/release cycle from rebuilding the entire residency snapshot each frame.
+  uint64_t h=addWithResidency(b,d.texture,2,NO); r.slot=h; return h;
  }
  case MBPresent: {MBResource *r=resource(b,u[0],6); require(r.auxiliary!=nil,@"no acquired drawable");
-  MBResource *drawable=resource(b,r.slot,2); uint64_t h=submit(b,u[1],r.auxiliary);
-  [b.residentResources removeObjectIdenticalTo:drawable.object]; b.residencyDirty=YES;
+  resource(b,r.slot,2); uint64_t h=submit(b,u[1],r.auxiliary);
   [b.resources removeObjectForKey:@(r.slot)]; r.slot=0; r.auxiliary=nil;
   // gamekit reuses mapped frame data and reads counters immediately after Present.
   // Match the synchronous presentation contract of the Vulkan backend.

@@ -1,4 +1,4 @@
-// Package gpu is GameKit's rendering hardware interface: a thin, bindless,
+// Package gpu is gamekit's rendering hardware interface: a thin, bindless,
 // GPU-driven abstraction over a modern explicit API. It is modelled on
 // Sebastian Aaltonen's "no graphics API" proposal and maps directly onto
 // Vulkan 1.3 (the backend targets apiVersion 1.3; the features it relies on —

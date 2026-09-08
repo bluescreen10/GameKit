@@ -16,7 +16,7 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 		t.Skip("DISPLAY is not set")
 	}
 
-	window, err := CreateWindow("GameKit test", 320, 200, &WindowOptions{Hidden: true, Resizable: true})
+	window, err := CreateWindow("gamekit test", 320, 200, &WindowOptions{Hidden: true, Resizable: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 	if width, height := window.Size(); width != 320 || height != 200 {
 		t.Fatalf("window size = %dx%d, want 320x200", width, height)
 	}
-	x, y := window.GetCursorPos()
+	x, y := window.GetPointerPos()
 	if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) {
 		t.Fatalf("cursor position = (%v, %v), want finite coordinates", x, y)
 	}

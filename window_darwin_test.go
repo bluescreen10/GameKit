@@ -14,7 +14,7 @@ var cocoaTestWindow *Window
 var cocoaTestWindowError error
 
 func TestMain(m *testing.M) {
-	cocoaTestWindow, cocoaTestWindowError = CreateWindow("GameKit test", 320, 200, &WindowOptions{Hidden: true, Resizable: true})
+	cocoaTestWindow, cocoaTestWindowError = CreateWindow("gamekit test", 320, 200, &WindowOptions{Hidden: true, Resizable: true})
 	code := m.Run()
 	if cocoaTestWindow != nil {
 		cocoaTestWindow.Destroy()
@@ -32,7 +32,7 @@ func TestNativeCocoaWindow(t *testing.T) {
 	if width, height := cocoaTestWindow.Size(); width != 320 || height != 200 {
 		t.Fatalf("window size = %dx%d, want 320x200", width, height)
 	}
-	x, y := cocoaTestWindow.GetCursorPos()
+	x, y := cocoaTestWindow.GetPointerPos()
 	if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) {
 		t.Fatalf("cursor position = (%v, %v), want finite coordinates", x, y)
 	}

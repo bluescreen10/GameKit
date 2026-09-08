@@ -17,6 +17,15 @@ struct GKWindowNative {
     GKWindowDelegate *delegate;
     int shouldClose;
     unsigned char keys[GK_KEY_COUNT];
+    unsigned char buttons[GK_POINTER_BUTTON_COUNT];
+    double scrollX, scrollY;
+    int cursorMode;
+    /* Virtual cursor position, accumulated from deltas while the cursor is
+       disabled. The real cursor is frozen then, so this is the only meaningful
+       position to report. */
+    double virtualX, virtualY;
+    /* runtime/cgo Handle for the Go *Window; see gkWindowSetHandle. */
+    uintptr_t handle;
 };
 
 @implementation GKWindowDelegate
@@ -78,22 +87,149 @@ static NSEventModifierFlags gkMacModifierMask(unsigned short code) {
     }
 }
 
+/* Translate Cocoa's modifier flags into GameKit's portable bitmask. */
+static int gkMacMods(NSEventModifierFlags flags) {
+    int mods = 0;
+    if (flags & NSEventModifierFlagShift) mods |= GK_MOD_SHIFT;
+    if (flags & NSEventModifierFlagControl) mods |= GK_MOD_CONTROL;
+    if (flags & NSEventModifierFlagOption) mods |= GK_MOD_ALT;
+    if (flags & NSEventModifierFlagCommand) mods |= GK_MOD_SUPER;
+    if (flags & NSEventModifierFlagCapsLock) mods |= GK_MOD_CAPS_LOCK;
+    if (flags & NSEventModifierFlagNumericPad) mods |= GK_MOD_NUM_LOCK;
+    return mods;
+}
+
+/*
+ * Apply a cursor mode.
+ *
+ * Disabled mode uses CGAssociateMouseAndMouseCursorPosition(false), which detaches the
+ * on-screen cursor from the hardware while leaving NSEvent's deltaX/deltaY live. That
+ * is preferable to the warp-to-centre trick: no synthetic motion events to filter out,
+ * and no visible jitter if a frame is slow.
+ */
+static void gkApplyCursorMode(GKWindowNative *native) {
+    if (!native) return;
+    static int hidden = 0;
+    int wantHidden = native->cursorMode != GK_CURSOR_NORMAL;
+    if (wantHidden && !hidden) {
+        [NSCursor hide];
+        hidden = 1;
+    } else if (!wantHidden && hidden) {
+        [NSCursor unhide];
+        hidden = 0;
+    }
+    CGAssociateMouseAndMouseCursorPosition(native->cursorMode != GK_CURSOR_DISABLED);
+}
+
+/* Pointing-device events: buttons, scroll, and motion while the cursor is disabled. */
+static void gkHandlePointerEvent(GKWindowNative *native, NSEvent *event) {
+    if (!native) return;
+    int mods = gkMacMods([event modifierFlags]);
+    switch ([event type]) {
+        case NSEventTypeLeftMouseDown:
+        case NSEventTypeRightMouseDown:
+        case NSEventTypeOtherMouseDown: {
+            int button = (int)[event buttonNumber];
+            if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
+                native->buttons[button] = GK_POINTER_PRESSED;
+                gkGoPointerButtonEvent(native->handle, button, GK_POINTER_PRESSED, mods);
+            }
+            break;
+        }
+        case NSEventTypeLeftMouseUp:
+        case NSEventTypeRightMouseUp:
+        case NSEventTypeOtherMouseUp: {
+            int button = (int)[event buttonNumber];
+            if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
+                native->buttons[button] = GK_POINTER_RELEASED;
+                gkGoPointerButtonEvent(native->handle, button, GK_POINTER_RELEASED, mods);
+            }
+            break;
+        }
+        case NSEventTypeScrollWheel: {
+            double dx = [event scrollingDeltaX];
+            double dy = [event scrollingDeltaY];
+            /* Precise deltas come in pixels from a trackpad; a wheel reports lines.
+               Normalise the wheel to roughly one unit per detent so both feel alike. */
+            if (![event hasPreciseScrollingDeltas]) {
+                dx *= 0.1;
+                dy *= 0.1;
+            }
+            native->scrollX += dx;
+            native->scrollY += dy;
+            gkGoScrollEvent(native->handle, dx, dy);
+            break;
+        }
+        case NSEventTypeMouseMoved:
+        case NSEventTypeLeftMouseDragged:
+        case NSEventTypeRightMouseDragged:
+        case NSEventTypeOtherMouseDragged:
+            if (native->cursorMode == GK_CURSOR_DISABLED) {
+                native->virtualX += [event deltaX];
+                native->virtualY += [event deltaY];
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 static void gkHandleKeyEvent(GKWindowNative *native, NSEvent *event) {
-    int key = gkMacKey([event keyCode]);
-    if (!native || key < 0 || key >= GK_KEY_COUNT) return;
     switch ([event type]) {
         case NSEventTypeKeyDown:
-            native->keys[key] = [event isARepeat] ? GK_KEY_REPEAT : GK_KEY_PRESSED;
+        case NSEventTypeKeyUp:
+        case NSEventTypeFlagsChanged:
+            break;
+        default:
+            return;
+    }
+    int key = gkMacKey([event keyCode]);
+    if (!native || key < 0 || key >= GK_KEY_COUNT) return;
+    int mods = gkMacMods([event modifierFlags]);
+    int action = GK_KEY_RELEASED;
+    switch ([event type]) {
+        case NSEventTypeKeyDown:
+            action = [event isARepeat] ? GK_KEY_REPEAT : GK_KEY_PRESSED;
+            native->keys[key] = (unsigned char)action;
             break;
         case NSEventTypeKeyUp:
+            action = GK_KEY_RELEASED;
             native->keys[key] = GK_KEY_RELEASED;
             break;
         case NSEventTypeFlagsChanged: {
             NSEventModifierFlags mask = gkMacModifierMask([event keyCode]);
-            native->keys[key] = ([event modifierFlags] & mask) ? GK_KEY_PRESSED : GK_KEY_RELEASED;
+            action = ([event modifierFlags] & mask) ? GK_KEY_PRESSED : GK_KEY_RELEASED;
+            native->keys[key] = (unsigned char)action;
             break;
         }
-        default: break;
+        default: return;
+    }
+    gkGoKeyEvent(native->handle, key, (int)[event keyCode], action, mods);
+
+    /* Text is a separate signal: what a keystroke produces depends on layout, shift
+       state and any pending dead key, none of which the key code above carries. Cocoa
+       resolves all of that into [event characters]. */
+    if ([event type] == NSEventTypeKeyDown) {
+        NSString *text = [event characters];
+        NSUInteger length = [text length];
+        for (NSUInteger i = 0; i < length; i++) {
+            unichar unit = [text characterAtIndex:i];
+            /* Cocoa reports arrows, function keys and the like in a private-use block;
+               they are key events, not text. */
+            if (unit >= 0xF700 && unit <= 0xF8FF) continue;
+            if (unit < 0x20 || unit == 0x7F) continue;
+            unsigned int codepoint = unit;
+            /* Recombine a surrogate pair into one codepoint. */
+            if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < length) {
+                unichar low = [text characterAtIndex:i + 1];
+                if (low >= 0xDC00 && low <= 0xDFFF) {
+                    codepoint = 0x10000 + (((unsigned int)unit - 0xD800) << 10) +
+                                ((unsigned int)low - 0xDC00);
+                    i++;
+                }
+            }
+            gkGoCharEvent(native->handle, codepoint);
+        }
     }
 }
 
@@ -155,6 +291,12 @@ void gkWindowDestroy(void *pointer) {
     if (!pointer) return;
     @autoreleasepool {
         GKWindowNative *native = pointer;
+        /* Leaving a hidden or detached cursor behind would outlive the window and
+           affect the whole application. */
+        if (native->cursorMode != GK_CURSOR_NORMAL) {
+            native->cursorMode = GK_CURSOR_NORMAL;
+            gkApplyCursorMode(native);
+        }
         [native->window setDelegate:nil];
         [native->window orderOut:nil];
         [native->window close];
@@ -173,6 +315,7 @@ void gkWindowPoll(void *pointer) {
             GKWindowDelegate *delegate = (GKWindowDelegate *)[[event window] delegate];
             if ([delegate isKindOfClass:[GKWindowDelegate class]]) {
                 gkHandleKeyEvent(delegate.owner, event);
+                gkHandlePointerEvent(delegate.owner, event);
             }
             [NSApp sendEvent:event];
         }
@@ -219,12 +362,54 @@ void *gkWindowNativeDisplay(void *pointer) {
 
 void gkWindowCursorPosition(void *pointer, double *x, double *y) {
     GKWindowNative *native = pointer;
+    if (native->cursorMode == GK_CURSOR_DISABLED) {
+        /* The real cursor is frozen; report the accumulated virtual motion instead. */
+        if (x) *x = native->virtualX;
+        if (y) *y = native->virtualY;
+        return;
+    }
     NSView *content = [native->window contentView];
     NSPoint point = [content convertPoint:[native->window mouseLocationOutsideOfEventStream]
                                  fromView:nil];
     NSRect bounds = [content bounds];
     if (x) *x = point.x;
     if (y) *y = bounds.size.height - point.y;
+}
+
+void gkWindowSetHandle(void *pointer, uintptr_t handle) {
+    if (pointer) ((GKWindowNative *)pointer)->handle = handle;
+}
+
+int gkWindowGetPointerButton(void *pointer, int button) {
+    if (!pointer || button < 0 || button >= GK_POINTER_BUTTON_COUNT) return GK_POINTER_RELEASED;
+    return ((GKWindowNative *)pointer)->buttons[button];
+}
+
+void gkWindowGetScroll(void *pointer, double *x, double *y) {
+    GKWindowNative *native = pointer;
+    if (x) *x = native ? native->scrollX : 0.0;
+    if (y) *y = native ? native->scrollY : 0.0;
+}
+
+void gkWindowSetCursorMode(void *pointer, int mode) {
+    GKWindowNative *native = pointer;
+    if (!native || native->cursorMode == mode) return;
+    @autoreleasepool {
+        /* Entering disabled mode restarts the virtual position from where the cursor
+           actually is, so the first frame after the switch reports no jump. */
+        if (mode == GK_CURSOR_DISABLED) {
+            double x = 0, y = 0;
+            gkWindowCursorPosition(pointer, &x, &y);
+            native->virtualX = x;
+            native->virtualY = y;
+        }
+        native->cursorMode = mode;
+        gkApplyCursorMode(native);
+    }
+}
+
+int gkWindowGetCursorMode(void *pointer) {
+    return pointer ? ((GKWindowNative *)pointer)->cursorMode : GK_CURSOR_NORMAL;
 }
 
 int gkWindowGetKey(void *pointer, int key) {

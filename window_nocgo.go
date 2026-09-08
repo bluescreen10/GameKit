@@ -19,3 +19,5 @@ func nativeWindowFramebufferSize(unsafe.Pointer) (int, int) { return 0, 0 }
 func setNativeWindowTitle(unsafe.Pointer, string)           {}
 func nativeWindowHandle(unsafe.Pointer) uintptr             { return 0 }
 func nativeWindowDisplay(unsafe.Pointer) unsafe.Pointer     { return nil }
+
+func setNativeWindowHandle(unsafe.Pointer, uintptr) {}

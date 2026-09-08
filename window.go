@@ -26,6 +26,16 @@ type Window struct {
 	native    unsafe.Pointer
 	title     string
 	destroyed bool
+
+	// handle identifies this window to the C layer, which cannot hold a Go pointer.
+	// Released by Destroy; see callbacks.go.
+	handle uintptr
+
+	// Event callbacks, all guarded by mu. See callbacks.go.
+	keyCallback           KeyCallback
+	charCallback          CharCallback
+	scrollCallback        ScrollCallback
+	pointerButtonCallback PointerButtonCallback
 }
 
 var (
@@ -51,6 +61,9 @@ func CreateWindow(title string, width, height int, opts *WindowOptions) (*Window
 	windowsMu.Lock()
 	windows[w] = struct{}{}
 	windowsMu.Unlock()
+	// Give the C layer a way to name this window when it dispatches an event.
+	w.handle = newWindowHandle(w)
+	setNativeWindowHandle(native, w.handle)
 	return w, nil
 }
 
@@ -65,13 +78,19 @@ func (w *Window) Destroy() {
 		return
 	}
 	native := w.native
+	handle := w.handle
 	w.native = nil
+	w.handle = 0
 	w.destroyed = true
 	w.mu.Unlock()
 
 	windowsMu.Lock()
 	delete(windows, w)
 	windowsMu.Unlock()
+	// Clear the handle before the native window goes away, so an event still in flight
+	// resolves to nothing rather than to a freed window.
+	setNativeWindowHandle(native, 0)
+	deleteWindowHandle(handle)
 	destroyNativeWindow(native)
 }
 
