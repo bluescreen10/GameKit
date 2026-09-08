@@ -21,5 +21,5 @@ func (w *Window) CreateSurface(backend gpu.Backend) (uintptr, error) {
 	if !ok {
 		return 0, errors.New("gamekit: backend cannot create a Win32 window surface")
 	}
-	return surfacer.CreateWin32Surface(w.NativeHandle()), nil
+	return surfacer.CreateWin32Surface(w.GetNativeHandle()), nil
 }

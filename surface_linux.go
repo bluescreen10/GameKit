@@ -22,5 +22,5 @@ func (w *Window) CreateSurface(backend gpu.Backend) (uintptr, error) {
 	if !ok {
 		return 0, errors.New("gamekit: backend cannot create an X11 window surface")
 	}
-	return surfacer.CreateXlibSurface(w.NativeDisplay(), w.NativeHandle()), nil
+	return surfacer.CreateXlibSurface(w.GetNativeDisplay(), w.GetNativeHandle()), nil
 }

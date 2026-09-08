@@ -21,10 +21,10 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer window.Destroy()
-	if window.NativeDisplay() == nil || window.NativeHandle() == 0 {
+	if window.GetNativeDisplay() == nil || window.GetNativeHandle() == 0 {
 		t.Fatal("native X11 handles are missing")
 	}
-	if width, height := window.Size(); width != 320 || height != 200 {
+	if width, height := window.GetSize(); width != 320 || height != 200 {
 		t.Fatalf("window size = %dx%d, want 320x200", width, height)
 	}
 	x, y := window.GetPointerPos()
@@ -35,8 +35,8 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 		t.Fatalf("initial escape action = %v, want KeyReleased", action)
 	}
 	window.SetTitle("renamed")
-	if window.Title() != "renamed" {
-		t.Fatalf("title = %q, want renamed", window.Title())
+	if window.GetTitle() != "renamed" {
+		t.Fatalf("title = %q, want renamed", window.GetTitle())
 	}
 	window.SetShouldClose(true)
 	if !window.ShouldClose() {

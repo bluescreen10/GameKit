@@ -135,7 +135,7 @@ func (w *Window) SetShouldClose(close bool) {
 	}
 }
 
-// Size returns the native window's drawable client size in logical pixels.
+// GetSize returns the native window's drawable client size in logical pixels.
 func (w *Window) GetSize() (width, height int) {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowSize(native)
@@ -143,7 +143,7 @@ func (w *Window) GetSize() (width, height int) {
 	return 0, 0
 }
 
-// FramebufferSize returns the drawable size in physical pixels.
+// GetFramebufferSize returns the drawable size in physical pixels.
 func (w *Window) GetFramebufferSize() (width, height int) {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowFramebufferSize(native)
@@ -171,7 +171,7 @@ func (w *Window) GetTitle() string {
 	return w.title
 }
 
-// NativeHandle returns NSWindow*, X11 Window, or HWND depending on the platform.
+// GetNativeHandle returns NSWindow*, X11 Window, or HWND depending on the platform.
 // Prefer CreateSurface unless integrating another native API.
 func (w *Window) GetNativeHandle() uintptr {
 	if native := w.nativePointer(); native != nil {
@@ -180,7 +180,7 @@ func (w *Window) GetNativeHandle() uintptr {
 	return 0
 }
 
-// NativeDisplay returns the X11 Display* on Linux and nil on other platforms.
+// GetNativeDisplay returns the X11 Display* on Linux and nil on other platforms.
 func (w *Window) GetNativeDisplay() unsafe.Pointer {
 	if native := w.nativePointer(); native != nil {
 		return nativeWindowDisplay(native)
