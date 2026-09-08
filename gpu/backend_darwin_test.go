@@ -4,8 +4,8 @@ package gpu_test
 
 // Register both implementations; GAMEKIT_GPU_BACKEND selects the conformance backend.
 import (
-	_ "github.com/bluescreen10/GameKit/gpu/metal"
-	_ "github.com/bluescreen10/GameKit/gpu/vulkan"
+	_ "github.com/bluescreen10/gamekit/gpu/metal"
+	_ "github.com/bluescreen10/gamekit/gpu/vulkan"
 )
 
 // Regenerate Metal fixtures from the same SPIR-V as Vulkan (requires spirv-cross).

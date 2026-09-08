@@ -417,7 +417,7 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
   MBResource *drawable=resource(b,r.slot,2); uint64_t h=submit(b,u[1],r.auxiliary);
   [b.residentResources removeObjectIdenticalTo:drawable.object]; b.residencyDirty=YES;
   [b.resources removeObjectForKey:@(r.slot)]; r.slot=0; r.auxiliary=nil;
-  // GameKit reuses mapped frame data and reads counters immediately after Present.
+  // gamekit reuses mapped frame data and reads counters immediately after Present.
   // Match the synchronous presentation contract of the Vulkan backend.
   id<MTLCommandBuffer> finished=b.fences[@(h)]; completedSubmission(b,finished);
   [b.fences removeObjectForKey:@(h)]; return h;}

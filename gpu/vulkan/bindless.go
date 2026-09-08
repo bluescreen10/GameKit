@@ -8,7 +8,7 @@ import "C"
 import (
 	"fmt"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 // Desired heap capacities (clamped to device update-after-bind limits at init).

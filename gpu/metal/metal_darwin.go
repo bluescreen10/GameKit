@@ -13,12 +13,13 @@ package metal
 import "C"
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"runtime"
 	"unsafe"
 
-	"github.com/bluescreen10/GameKit/gpu"
-	metalshader "github.com/bluescreen10/GameKit/gpu/metal/shader"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 // Backend owns one device and serial queue. Like command recording, resource
@@ -139,8 +140,30 @@ func entry(s string) string {
 	}
 	return s
 }
+
+// shaderCode unwraps Pix's precompiled Metal artifact format. Translation and
+// metallib compilation happen in the application at build time; the backend only
+// consumes the resulting bytes and the local threadgroup dimensions stored beside
+// them. Raw MSL and metallib bytes remain valid and default to a 1x1x1 group.
+func shaderCode(data []byte) ([]byte, [3]uint32, error) {
+	group := [3]uint32{1, 1, 1}
+	if !bytes.HasPrefix(data, []byte("PIXMTL01")) {
+		return data, group, nil
+	}
+	if len(data) < 20 {
+		return nil, group, fmt.Errorf("truncated Metal shader header")
+	}
+	for i := range group {
+		group[i] = binary.LittleEndian.Uint32(data[8+i*4:])
+		if group[i] == 0 {
+			return nil, group, fmt.Errorf("zero workgroup dimension")
+		}
+	}
+	return data[20:], group, nil
+}
+
 func (b *Backend) CreateComputePipeline(d gpu.ComputePipelineDescriptor) gpu.Pipeline {
-	code, group, err := metalshader.Decode(d.Shader)
+	code, group, err := shaderCode(d.Shader)
 	if err != nil {
 		panic("metal: " + err.Error())
 	}
@@ -157,11 +180,11 @@ func (b *Backend) CreateComputePipeline(d gpu.ComputePipelineDescriptor) gpu.Pip
 }
 func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline {
 	var err error
-	d.VertexShader, _, err = metalshader.Decode(d.VertexShader)
+	d.VertexShader, _, err = shaderCode(d.VertexShader)
 	if err != nil {
 		panic(err)
 	}
-	d.FragmentShader, _, err = metalshader.Decode(d.FragmentShader)
+	d.FragmentShader, _, err = shaderCode(d.FragmentShader)
 	if err != nil {
 		panic(err)
 	}

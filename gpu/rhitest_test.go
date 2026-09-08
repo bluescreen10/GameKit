@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 // Test shaders are fixtures under gpu/testdata, embedded here (a _test.go file) so

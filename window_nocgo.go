@@ -7,7 +7,7 @@ import (
 	"unsafe"
 )
 
-func createNativeWindow(string, int, int, WindowHints) (unsafe.Pointer, error) {
+func createNativeWindow(string, int, int, WindowOptions) (unsafe.Pointer, error) {
 	return nil, errors.New("gamekit: native windows require cgo on a supported platform")
 }
 func destroyNativeWindow(unsafe.Pointer)                    {}

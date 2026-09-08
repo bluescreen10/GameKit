@@ -7,7 +7,7 @@ package gamekit
 */
 import "C"
 
-import "github.com/bluescreen10/GameKit/keyboard"
+import "github.com/bluescreen10/gamekit/keyboard"
 
 // GetKey returns the most recent native action for key. Call PollEvents once per
 // frame to update keyboard state and receive operating-system key-repeat events.

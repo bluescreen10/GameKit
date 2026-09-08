@@ -5,7 +5,7 @@ package vulkan
 */
 import "C"
 
-import "github.com/bluescreen10/GameKit/gpu"
+import "github.com/bluescreen10/gamekit/gpu"
 
 // CreateTimestampPool allocates a pool of count timestamp query slots.
 func (b *Backend) CreateTimestampPool(count uint32) gpu.QueryPool {

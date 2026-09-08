@@ -7,14 +7,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bluescreen10/GameKit/keyboard"
+	"github.com/bluescreen10/gamekit/keyboard"
 )
 
 var cocoaTestWindow *Window
 var cocoaTestWindowError error
 
 func TestMain(m *testing.M) {
-	cocoaTestWindow, cocoaTestWindowError = CreateWindow("GameKit test", 320, 200, &WindowHints{Hidden: true, Resizable: true})
+	cocoaTestWindow, cocoaTestWindowError = CreateWindow("GameKit test", 320, 200, &WindowOptions{Hidden: true, Resizable: true})
 	code := m.Run()
 	if cocoaTestWindow != nil {
 		cocoaTestWindow.Destroy()

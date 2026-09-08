@@ -10,8 +10,8 @@
  VkResult vkbCreateInstance(uint32_t nExt, const char* const* exts, VkInstance* out) {
     VkApplicationInfo app = {0};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app.pApplicationName = "GameKit";
-    app.pEngineName = "GameKit";
+    app.pApplicationName = "gamekit";
+    app.pEngineName = "gamekit";
     app.apiVersion = VK_API_VERSION_1_3;
 
     VkInstanceCreateInfo ci = {0};

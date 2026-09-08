@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 func TestAlloc(t *testing.T) {

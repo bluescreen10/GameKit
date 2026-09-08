@@ -16,7 +16,7 @@ import (
 	"unsafe"
 )
 
-func createNativeWindow(title string, width, height int, hints WindowHints) (unsafe.Pointer, error) {
+func createNativeWindow(title string, width, height int, hints WindowOptions) (unsafe.Pointer, error) {
 	ctitle := C.CString(title)
 	defer C.free(unsafe.Pointer(ctitle))
 	var flags C.uint32_t

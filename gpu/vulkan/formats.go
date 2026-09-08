@@ -3,7 +3,7 @@ package vulkan
 // #include "bridge.h"
 import "C"
 
-import "github.com/bluescreen10/GameKit/gpu"
+import "github.com/bluescreen10/gamekit/gpu"
 
 // vkFormat maps an gpu.Format to a VkFormat.
 func vkFormat(f gpu.Format) C.VkFormat {

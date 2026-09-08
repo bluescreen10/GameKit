@@ -5,7 +5,7 @@ package gamekit
 import (
 	"errors"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 type win32SurfaceBackend interface {

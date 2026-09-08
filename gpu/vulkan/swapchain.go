@@ -8,7 +8,7 @@ import "C"
 import (
 	"fmt"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 type swapchainState struct {

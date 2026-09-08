@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/bluescreen10/GameKit/gpu/metal"
+	"github.com/bluescreen10/gamekit/gpu/metal"
 )
 
 // MetalSurfaceExtensions are the instance extensions needed for a Metal surface;

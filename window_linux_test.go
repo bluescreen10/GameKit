@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/bluescreen10/GameKit/gpu/vulkan"
-	"github.com/bluescreen10/GameKit/keyboard"
+	"github.com/bluescreen10/gamekit/gpu/vulkan"
+	"github.com/bluescreen10/gamekit/keyboard"
 )
 
 func TestNativeWindowAndVulkanSurface(t *testing.T) {
@@ -16,7 +16,7 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 		t.Skip("DISPLAY is not set")
 	}
 
-	window, err := CreateWindow("GameKit test", 320, 200, &WindowHints{Hidden: true, Resizable: true})
+	window, err := CreateWindow("GameKit test", 320, 200, &WindowOptions{Hidden: true, Resizable: true})
 	if err != nil {
 		t.Fatal(err)
 	}

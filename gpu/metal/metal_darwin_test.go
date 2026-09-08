@@ -4,13 +4,22 @@ package metal_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 	"unsafe"
 
-	"github.com/bluescreen10/GameKit/gpu"
-	"github.com/bluescreen10/GameKit/gpu/metal"
-	"github.com/bluescreen10/GameKit/gpu/metal/shader"
+	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/gpu/metal"
 )
+
+func encodedShader(code []byte, group [3]uint32) []byte {
+	out := make([]byte, 20, len(code)+20)
+	copy(out, "PIXMTL01")
+	for i, n := range group {
+		binary.LittleEndian.PutUint32(out[8+i*4:], n)
+	}
+	return append(out, code...)
+}
 
 func device(t *testing.T) *metal.Backend {
 	t.Helper()
@@ -70,7 +79,7 @@ func TestDispatchIndirectAndEntries(t *testing.T) {
  using namespace metal;
  struct Root {device atomic_uint *value;}; struct Push {device Root *root;};
  kernel void increment(constant Push &p [[buffer(0)]]) {atomic_fetch_add_explicit(p.root->value,1u,memory_order_relaxed);}`)
-	p := b.CreateComputePipeline(gpu.ComputePipelineDescriptor{Shader: shader.Encode(source, [3]uint32{4, 2, 1}), Entry: "increment"})
+	p := b.CreateComputePipeline(gpu.ComputePipelineDescriptor{Shader: encodedShader(source, [3]uint32{4, 2, 1}), Entry: "increment"})
 	value := b.Alloc(4, gpu.MemoryHost, "counter")
 	*(*uint32)(value.Ptr) = 0
 	root := b.Alloc(8, gpu.MemoryHost, "root")

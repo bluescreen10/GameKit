@@ -285,7 +285,7 @@ const (
 // formats/topology that actually affect codegen. Viewport, scissor, blend
 // constants and stencil ref are dynamic; per-draw data comes via the root pointer.
 // Shader bytes are backend-specific: Vulkan accepts SPIR-V; Metal accepts MSL,
-// metallib, or the metadata package produced by gpu/metal/cmd/metalshader.
+// metallib, or a precompiled artifact containing local threadgroup metadata.
 type PipelineDescriptor struct {
 	VertexShader   []byte
 	FragmentShader []byte

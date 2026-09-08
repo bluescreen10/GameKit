@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 // gpuDrawable matches Drawable in testdata/instanced.{comp,vert} (scalar, 20 bytes).

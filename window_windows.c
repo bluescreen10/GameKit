@@ -13,7 +13,7 @@ typedef struct {
     unsigned char keys[GK_KEY_COUNT];
 } GKWindowNative;
 
-static const wchar_t *gkWindowClass = L"GameKitNativeWindow";
+static const wchar_t *gkWindowClass = L"gamekitNativeWindow";
 static ATOM gkWindowClassAtom;
 
 static void gkSetError(char *error, size_t size, const char *message) {

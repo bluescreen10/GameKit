@@ -5,7 +5,7 @@ package gamekit
 import (
 	"errors"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 func (w *Window) CreateSurface(gpu.Backend) (uintptr, error) {

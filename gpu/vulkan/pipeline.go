@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/bluescreen10/GameKit/gpu"
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
 func topology(t gpu.Topology) C.VkPrimitiveTopology {

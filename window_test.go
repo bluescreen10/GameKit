@@ -3,7 +3,7 @@ package gamekit
 import (
 	"testing"
 
-	"github.com/bluescreen10/GameKit/keyboard"
+	"github.com/bluescreen10/gamekit/keyboard"
 )
 
 func TestCreateWindowRejectsInvalidSize(t *testing.T) {
