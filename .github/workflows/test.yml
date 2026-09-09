@@ -72,10 +72,19 @@ jobs:
 
   macos:
     name: macOS
-    runs-on: macos-latest
-    timeout-minutes: 15
+    # Pinned rather than macos-latest: KosmicKrisp is Apple Silicon only, and a runner
+    # image that quietly moved back to x86_64 would fail as if the driver were broken.
+    runs-on: macos-15
+    # The SDK download is ~376 MB, so this job needs more headroom than the others.
+    timeout-minutes: 25
     env:
       CGO_ENABLED: "1"
+      # Vulkan-on-Metal through KosmicKrisp, which is the combination this engine
+      # actually ships on. Switch to "metal" if the driver proves unstable on runners.
+      GAMEKIT_GPU_BACKEND: vulkan
+      # Pinned rather than "latest" so a CI failure is always reproducible, and so this
+      # matches the SDK used in development.
+      VULKAN_SDK_VERSION: 1.4.357.1
 
     steps:
       - name: Check out repository
@@ -87,6 +96,40 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # KosmicKrisp is Mesa's Vulkan-on-Metal driver and ships only inside the LunarG
+      # SDK, as the com.lunarg.vulkan.kosmic component. com.lunarg.vulkan.usr is what
+      # copies headers, the loader and the ICD manifests into /usr/local — which is
+      # exactly where gpu/vulkan's #cgo darwin flags already look, so nothing here has
+      # to override them.
+      - name: Install the Vulkan SDK with KosmicKrisp
+        run: |
+          ver="$VULKAN_SDK_VERSION"
+          curl -sSfL -o vulkansdk.zip \
+            "https://sdk.lunarg.com/sdk/download/${ver}/mac/vulkansdk-macos-${ver}.zip"
+          unzip -q vulkansdk.zip -d vulkansdk
+          # The installer lives inside an .app bundle whose name carries the version;
+          # find it rather than hardcoding a path that changes every release.
+          installer="$(find vulkansdk -type f -path '*/Contents/MacOS/vulkansdk-macOS-*' -print -quit)"
+          test -n "$installer" || { echo "installer not found in the SDK archive"; exit 1; }
+          sudo "$installer" \
+            --root "$HOME/VulkanSDK/${ver}" \
+            --accept-licenses --accept-messages --default-answer --confirm-command \
+            install com.lunarg.vulkan.core com.lunarg.vulkan.usr com.lunarg.vulkan.kosmic
+
+      - name: Select KosmicKrisp
+        run: |
+          icd=/usr/local/share/vulkan/icd.d/libkosmickrisp_icd.json
+          test -f "$icd" || { echo "KosmicKrisp ICD missing — did com.lunarg.vulkan.kosmic install?"; exit 1; }
+          echo "VK_DRIVER_FILES=$icd" >> "$GITHUB_ENV"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+
+      # Fail here, with a readable device list, rather than inside an opaque test error
+      # if the driver did not load.
+      - name: Verify KosmicKrisp is the active driver
+        run: |
+          vulkaninfo --summary | sed -n '/^Devices:/,$p' | head -20
+          vulkaninfo --summary | grep -q "KosmicKrisp" || { echo "KosmicKrisp is not the active driver"; exit 1; }
+
       - name: Build
         run: go build ./...
 
@@ -94,8 +137,7 @@ jobs:
         run: go vet ./...
 
       # Cocoa needs a WindowServer connection to create a window at all, which the
-      # hosted macOS runners have. Metal is present natively, so the gpu tests run here
-      # rather than skipping.
+      # hosted macOS runners have.
       - name: Test
         run: go test ./... -count=1 -v
 

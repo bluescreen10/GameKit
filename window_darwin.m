@@ -12,6 +12,22 @@ typedef struct GKWindowNative GKWindowNative;
 @property(assign) GKWindowNative *owner;
 @end
 
+/*
+ * Cocoa sends keyboard events to the window's first responder after GameKit has
+ * recorded them in gkWindowPoll. NSView does not accept first-responder status by
+ * default, so an otherwise unhandled keyDown reaches NSApplication and produces
+ * the system alert sound. This view consumes those already-recorded events.
+ */
+@interface GKContentView : NSView
+@end
+
+@implementation GKContentView
+- (BOOL)acceptsFirstResponder { return YES; }
+- (void)keyDown:(NSEvent *)event { (void)event; }
+- (void)keyUp:(NSEvent *)event { (void)event; }
+- (void)flagsChanged:(NSEvent *)event { (void)event; }
+@end
+
 struct GKWindowNative {
     NSWindow *window;
     GKWindowDelegate *delegate;
@@ -190,7 +206,9 @@ static void gkHandleKeyEvent(GKWindowNative *native, NSEvent *event) {
     switch ([event type]) {
         case NSEventTypeKeyDown:
             action = [event isARepeat] ? GK_KEY_REPEAT : GK_KEY_PRESSED;
-            native->keys[key] = (unsigned char)action;
+            /* Polling reports whether the key is down. Repeat is an event-stream
+               detail and must not replace the held state returned by GetKey. */
+            native->keys[key] = GK_KEY_PRESSED;
             break;
         case NSEventTypeKeyUp:
             action = GK_KEY_RELEASED;
@@ -269,6 +287,11 @@ void *gkWindowCreate(const char *title, int width, int height, uint32_t flags,
         native->delegate = [[GKWindowDelegate alloc] init];
         native->delegate.owner = native;
         [window setDelegate:native->delegate];
+        GKContentView *content = [[GKContentView alloc] initWithFrame:[[window contentView] frame]];
+        [content setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+        [window setContentView:content];
+        [window makeFirstResponder:content];
+        [content release];
         [window setReleasedWhenClosed:NO];
         [window setTitle:[NSString stringWithUTF8String:title ? title : ""]];
         [window center];
