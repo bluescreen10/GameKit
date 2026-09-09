@@ -11,8 +11,6 @@
 typedef struct {
     HWND window;
     int shouldClose;
-    unsigned char keys[GK_KEY_COUNT];
-    unsigned char buttons[GK_POINTER_BUTTON_COUNT];
     double scrollX, scrollY;
     int cursorMode;
     /* Virtual cursor position, accumulated from deltas while the cursor is disabled,
@@ -164,7 +162,6 @@ static LRESULT CALLBACK gkWindowProc(HWND window, UINT message, WPARAM wparam, L
             } else {
                 action = (lparam & (1l << 30)) ? GK_KEY_REPEAT : GK_KEY_PRESSED;
             }
-            native->keys[key] = (unsigned char)action;
             gkGoKeyEvent(native->handle, key, (int)((lparam >> 16) & 0xFF), action, gkWinMods());
         }
     } else if (message == WM_CHAR || message == WM_SYSCHAR) {
@@ -206,7 +203,6 @@ static LRESULT CALLBACK gkWindowProc(HWND window, UINT message, WPARAM wparam, L
                     break;
             }
             if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
-                native->buttons[button] = (unsigned char)action;
                 gkGoPointerButtonEvent(native->handle, button, action, gkWinMods());
             }
         }
@@ -371,24 +367,14 @@ void gkWindowCursorPosition(void *pointer, double *x, double *y) {
         return;
     }
     POINT point = {0};
-    GetPointerPos(&point);
+    GetCursorPos(&point);
     ScreenToClient(native->window, &point);
     if (x) *x = (double)point.x;
     if (y) *y = (double)point.y;
 }
 
-int gkWindowGetKey(void *pointer, int key) {
-    if (!pointer || key < 0 || key >= GK_KEY_COUNT) return GK_KEY_RELEASED;
-    return ((GKWindowNative *)pointer)->keys[key];
-}
-
 void gkWindowSetHandle(void *pointer, uintptr_t handle) {
     if (pointer) ((GKWindowNative *)pointer)->handle = handle;
-}
-
-int gkWindowGetPointerButton(void *pointer, int button) {
-    if (!pointer || button < 0 || button >= GK_POINTER_BUTTON_COUNT) return GK_POINTER_RELEASED;
-    return ((GKWindowNative *)pointer)->buttons[button];
 }
 
 void gkWindowGetScroll(void *pointer, double *x, double *y) {

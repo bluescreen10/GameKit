@@ -32,8 +32,6 @@ struct GKWindowNative {
     NSWindow *window;
     GKWindowDelegate *delegate;
     int shouldClose;
-    unsigned char keys[GK_KEY_COUNT];
-    unsigned char buttons[GK_POINTER_BUTTON_COUNT];
     double scrollX, scrollY;
     int cursorMode;
     /* Virtual cursor position, accumulated from deltas while the cursor is
@@ -115,6 +113,30 @@ static int gkMacMods(NSEventModifierFlags flags) {
     return mods;
 }
 
+/* Move the hardware cursor into the content view before disabled mode detaches it.
+   Mouse motion is routed to the window under the cursor on macOS; without this, a
+   window that starts with the cursor elsewhere never receives the deltas. Deriving
+   the Quartz destination as a delta from both APIs' current positions also works for
+   secondary displays, whose global origins need not match the main display. */
+static void gkMacWarpToCentre(GKWindowNative *native) {
+    NSView *content = [native->window contentView];
+    NSRect bounds = [content bounds];
+    NSPoint centre = NSMakePoint(NSMidX(bounds), NSMidY(bounds));
+    NSPoint targetCocoa = [native->window convertPointToScreen:
+        [content convertPoint:centre toView:nil]];
+    NSPoint currentCocoa = [NSEvent mouseLocation];
+
+    CGEventRef currentEvent = CGEventCreate(NULL);
+    if (!currentEvent) return;
+    CGPoint currentQuartz = CGEventGetLocation(currentEvent);
+    CFRelease(currentEvent);
+
+    CGPoint targetQuartz = CGPointMake(
+        currentQuartz.x + targetCocoa.x - currentCocoa.x,
+        currentQuartz.y - (targetCocoa.y - currentCocoa.y));
+    CGWarpMouseCursorPosition(targetQuartz);
+}
+
 /*
  * Apply a cursor mode.
  *
@@ -147,7 +169,6 @@ static void gkHandlePointerEvent(GKWindowNative *native, NSEvent *event) {
         case NSEventTypeOtherMouseDown: {
             int button = (int)[event buttonNumber];
             if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
-                native->buttons[button] = GK_POINTER_PRESSED;
                 gkGoPointerButtonEvent(native->handle, button, GK_POINTER_PRESSED, mods);
             }
             break;
@@ -157,7 +178,6 @@ static void gkHandlePointerEvent(GKWindowNative *native, NSEvent *event) {
         case NSEventTypeOtherMouseUp: {
             int button = (int)[event buttonNumber];
             if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
-                native->buttons[button] = GK_POINTER_RELEASED;
                 gkGoPointerButtonEvent(native->handle, button, GK_POINTER_RELEASED, mods);
             }
             break;
@@ -206,18 +226,13 @@ static void gkHandleKeyEvent(GKWindowNative *native, NSEvent *event) {
     switch ([event type]) {
         case NSEventTypeKeyDown:
             action = [event isARepeat] ? GK_KEY_REPEAT : GK_KEY_PRESSED;
-            /* Polling reports whether the key is down. Repeat is an event-stream
-               detail and must not replace the held state returned by GetKey. */
-            native->keys[key] = GK_KEY_PRESSED;
             break;
         case NSEventTypeKeyUp:
             action = GK_KEY_RELEASED;
-            native->keys[key] = GK_KEY_RELEASED;
             break;
         case NSEventTypeFlagsChanged: {
             NSEventModifierFlags mask = gkMacModifierMask([event keyCode]);
             action = ([event modifierFlags] & mask) ? GK_KEY_PRESSED : GK_KEY_RELEASED;
-            native->keys[key] = (unsigned char)action;
             break;
         }
         default: return;
@@ -404,11 +419,6 @@ void gkWindowSetHandle(void *pointer, uintptr_t handle) {
     if (pointer) ((GKWindowNative *)pointer)->handle = handle;
 }
 
-int gkWindowGetPointerButton(void *pointer, int button) {
-    if (!pointer || button < 0 || button >= GK_POINTER_BUTTON_COUNT) return GK_POINTER_RELEASED;
-    return ((GKWindowNative *)pointer)->buttons[button];
-}
-
 void gkWindowGetScroll(void *pointer, double *x, double *y) {
     GKWindowNative *native = pointer;
     if (x) *x = native ? native->scrollX : 0.0;
@@ -426,6 +436,10 @@ void gkWindowSetCursorMode(void *pointer, int mode) {
             gkWindowCursorPosition(pointer, &x, &y);
             native->virtualX = x;
             native->virtualY = y;
+            [NSApp activateIgnoringOtherApps:YES];
+            [native->window makeKeyAndOrderFront:nil];
+            [native->window makeFirstResponder:[native->window contentView]];
+            gkMacWarpToCentre(native);
         }
         native->cursorMode = mode;
         gkApplyCursorMode(native);
@@ -434,9 +448,4 @@ void gkWindowSetCursorMode(void *pointer, int mode) {
 
 int gkWindowGetCursorMode(void *pointer) {
     return pointer ? ((GKWindowNative *)pointer)->cursorMode : GK_CURSOR_NORMAL;
-}
-
-int gkWindowGetKey(void *pointer, int key) {
-    if (!pointer || key < 0 || key >= GK_KEY_COUNT) return GK_KEY_RELEASED;
-    return ((GKWindowNative *)pointer)->keys[key];
 }

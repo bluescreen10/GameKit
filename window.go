@@ -5,6 +5,9 @@ import (
 	"errors"
 	"sync"
 	"unsafe"
+
+	"github.com/bluescreen10/gamekit/keyboard"
+	"github.com/bluescreen10/gamekit/pointer"
 )
 
 // WindowOptions controls optional native-window behavior. Its zero value creates
@@ -36,6 +39,11 @@ type Window struct {
 	charCallback          CharCallback
 	scrollCallback        ScrollCallback
 	pointerButtonCallback PointerButtonCallback
+
+	// Level-triggered input state. Native event dispatch updates these before calling
+	// user callbacks, so callbacks and polling always observe the same state.
+	keys    [keyboard.KeyMenu + 1]keyboard.KeyAction
+	buttons [pointer.ButtonCount]pointer.ButtonAction
 }
 
 var (

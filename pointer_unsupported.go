@@ -60,25 +60,20 @@ func (w *Window) SetPointerButtonCallback(cb PointerButtonCallback) PointerButto
 	return previous
 }
 
-// GetPointerButton reports every button released when native windows are unavailable.
-func (w *Window) GetPointerButton(pointer.Button) pointer.ButtonAction {
-	return pointer.Released
-}
-
 // GetScroll returns zeroes when native windows are unavailable.
 func (w *Window) GetScroll() (x, y float64) { return 0, 0 }
 
-// SetCursorMode does nothing when native windows are unavailable.
-func (w *Window) SetCursorMode(pointer.CursorMode) {}
+// SetPointerMode does nothing when native windows are unavailable.
+func (w *Window) SetPointerMode(pointer.Mode) {}
 
-// CursorMode reports the normal cursor when native windows are unavailable.
-func (w *Window) CursorMode() pointer.CursorMode { return pointer.CursorNormal }
+// GetPointerMode reports the normal cursor when native windows are unavailable.
+func (w *Window) GetPointerMode() pointer.Mode { return pointer.Normal }
 
-// DisableCursor does nothing when native windows are unavailable.
-func (w *Window) DisableCursor() {}
+// DisablePointer does nothing when native windows are unavailable.
+func (w *Window) DisablePointer() {}
 
-// EnableCursor does nothing when native windows are unavailable.
-func (w *Window) EnableCursor() {}
+// EnablePointer does nothing when native windows are unavailable.
+func (w *Window) EnablePointer() {}
 
 // Handles are meaningless without a C layer to hand them to, so these are no-ops:
 // nothing ever dispatches an event here.

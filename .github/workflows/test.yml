@@ -113,7 +113,7 @@ jobs:
           test -n "$installer" || { echo "installer not found in the SDK archive"; exit 1; }
           sudo "$installer" \
             --root "$HOME/VulkanSDK/${ver}" \
-            --accept-licenses --accept-messages --default-answer --confirm-command \
+            --accept-licenses --default-answer --confirm-command \
             install com.lunarg.vulkan.core com.lunarg.vulkan.usr com.lunarg.vulkan.kosmic
 
       - name: Select KosmicKrisp
@@ -133,8 +133,14 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # unsafeptr is off here, and only here. surface_darwin.go and gpu/vulkan's
+      # metal_darwin.go convert a uintptr back to an unsafe.Pointer to hand Cocoa and
+      # Vulkan handles (an NSWindow, a CAMetalLayer) across the cgo boundary. Those
+      # addresses belong to C, so the GC neither owns nor moves them, but vet's
+      # heuristic cannot tell them from laundering a real Go pointer. Every other check
+      # still runs, and no other platform compiles these files.
       - name: Vet
-        run: go vet ./...
+        run: go vet -unsafeptr=false ./...
 
       # Cocoa needs a WindowServer connection to create a window at all, which the
       # hosted macOS runners have.
@@ -144,9 +150,13 @@ jobs:
   windows:
     name: Windows
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       CGO_ENABLED: "1"
+      # Deliberately NOT the same version as the macOS job. LunarG patch-releases each
+      # platform independently: 1.4.357.1 exists only for macOS, and asking for it here
+      # returns a 404 rather than falling back to .0.
+      VULKAN_SDK_VERSION: 1.4.357.0
 
     steps:
       - name: Check out repository
@@ -163,14 +173,52 @@ jobs:
       - name: Verify the C toolchain
         run: gcc --version
 
+      # The install is a 274 MB download, and nothing about it varies between runs of the
+      # same SDK version — so cache the finished tree rather than the installer. The key
+      # carries the version, so a version bump misses and reinstalls on its own.
+      - name: Restore the cached Vulkan SDK
+        id: vulkan-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-windows-${{ env.VULKAN_SDK_VERSION }}
+
+      # gpu/vulkan is cgo that includes vulkan/vulkan.h and links vulkan-1, so it needs
+      # the SDK to COMPILE even though no driver will be present to run it. Without this
+      # the whole package fails to build and bridge_windows.c, extensions_windows.go and
+      # gpu/vulkan/surface_windows.go — which no other job compiles — go uncovered.
+      - name: Install the Vulkan SDK
+        if: steps.vulkan-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ver = $env:VULKAN_SDK_VERSION
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkansdk-windows-X64-$ver.exe"
+          Invoke-WebRequest -Uri $url -OutFile vulkansdk.exe
+          $p = Start-Process -FilePath .\vulkansdk.exe -Wait -PassThru -ArgumentList `
+            "--root", "C:\VulkanSDK", "--accept-licenses", "--default-answer", "--confirm-command", "install"
+          if ($p.ExitCode -ne 0) { throw "the Vulkan SDK installer failed with exit code $($p.ExitCode)" }
+
+      # Runs on both paths: a cache hit restores the tree but sets no environment, and it
+      # also catches a cache entry that restored damaged or incomplete — which would
+      # otherwise surface as a confusing missing-header error inside the cgo build.
+      - name: Point cgo at the Vulkan SDK
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\VulkanSDK\Include\vulkan\vulkan.h")) { throw "vulkan.h is missing from the SDK tree" }
+          if (-not (Test-Path "C:\VulkanSDK\Lib\vulkan-1.lib"))        { throw "vulkan-1.lib is missing from the SDK tree" }
+          # The #cgo windows directive already passes -lvulkan-1; only the search paths
+          # are machine-specific.
+          "CGO_CFLAGS=-IC:\VulkanSDK\Include"  | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CGO_LDFLAGS=-LC:\VulkanSDK\Lib"     | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Build
         run: go build ./...
 
       - name: Vet
         run: go vet ./...
 
-      # No Vulkan driver is present, so no backend registers and the gpu tests skip
-      # themselves. What this job covers is the Win32 window and input code, which is
-      # otherwise compiled nowhere.
+      # The SDK supplies headers and an import library, not a driver, so no backend
+      # registers and the gpu tests skip themselves. What this job covers is compilation
+      # of the Win32 window, input and Vulkan-surface code, which no other job compiles.
       - name: Test
         run: go test ./... -count=1 -v

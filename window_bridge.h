@@ -59,10 +59,7 @@ void gkWindowSetTitle(void *window, const char *title);
 uintptr_t gkWindowNativeHandle(void *window);
 void *gkWindowNativeDisplay(void *window);
 void gkWindowCursorPosition(void *window, double *x, double *y);
-int gkWindowGetKey(void *window, int key);
-
 /* Pointing device. */
-int gkWindowGetPointerButton(void *window, int button);
 void gkWindowGetScroll(void *window, double *x, double *y);
 void gkWindowSetCursorMode(void *window, int mode);
 int gkWindowGetCursorMode(void *window);

@@ -110,6 +110,12 @@
     // Anisotropic filtering is a base feature and must be requested explicitly,
     // or creating a sampler with anisotropyEnable is invalid.
     f2.features.samplerAnisotropy = VK_TRUE;
+    // 64-bit integers in shaders. A device address held in a buffer is a
+    // PhysicalStorageBuffer pointer and needs nothing extra, but the same address
+    // held in PUSH CONSTANTS is loaded as a plain 64-bit scalar, which makes the
+    // compiler emit the Int64 capability. Without this, every shader with an address
+    // in its root fails to create — silently, as a blank frame rather than an error.
+    f2.features.shaderInt64 = VK_TRUE;
     f2.pNext = &f12;
 
     const char* devExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };

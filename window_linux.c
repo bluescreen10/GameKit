@@ -16,8 +16,6 @@ typedef struct {
     Atom deleteWindow;
     Cursor blankCursor;
     int shouldClose;
-    unsigned char keys[GK_KEY_COUNT];
-    unsigned char buttons[GK_POINTER_BUTTON_COUNT];
     double scrollX, scrollY;
     int cursorMode;
     /* Virtual cursor position, accumulated from deltas while the cursor is disabled,
@@ -264,13 +262,7 @@ void gkWindowPoll(void *pointer) {
             int key = gkX11Key(XLookupKeysym(&event.xkey, 0));
             int mods = gkX11Mods(event.xkey.state);
             if (key >= 0 && key < GK_KEY_COUNT) {
-                int action;
-                if (event.type == KeyRelease) {
-                    action = GK_KEY_RELEASED;
-                } else {
-                    action = native->keys[key] == GK_KEY_RELEASED ? GK_KEY_PRESSED : GK_KEY_REPEAT;
-                }
-                native->keys[key] = (unsigned char)action;
+                int action = event.type == KeyRelease ? GK_KEY_RELEASED : GK_KEY_PRESSED;
                 gkGoKeyEvent(native->handle, key, (int)event.xkey.keycode, action, mods);
             }
             /* Text is resolved separately: XLookupString applies the keyboard layout,
@@ -312,7 +304,6 @@ void gkWindowPoll(void *pointer) {
                 else if (b >= 8) button = (int)b - 5; /* 8,9 -> 3,4 */
                 if (button >= 0 && button < GK_POINTER_BUTTON_COUNT) {
                     int action = event.type == ButtonPress ? GK_POINTER_PRESSED : GK_POINTER_RELEASED;
-                    native->buttons[button] = (unsigned char)action;
                     gkGoPointerButtonEvent(native->handle, button, action, mods);
                 }
             }
@@ -341,11 +332,6 @@ void gkWindowPoll(void *pointer) {
 
 void gkWindowSetHandle(void *pointer, uintptr_t handle) {
     if (pointer) ((GKWindowNative *)pointer)->handle = handle;
-}
-
-int gkWindowGetPointerButton(void *pointer, int button) {
-    if (!pointer || button < 0 || button >= GK_POINTER_BUTTON_COUNT) return GK_POINTER_RELEASED;
-    return ((GKWindowNative *)pointer)->buttons[button];
 }
 
 void gkWindowGetScroll(void *pointer, double *x, double *y) {
@@ -421,9 +407,4 @@ void gkWindowCursorPosition(void *pointer, double *x, double *y) {
                   &rootX, &rootY, &windowX, &windowY, &mask);
     if (x) *x = (double)windowX;
     if (y) *y = (double)windowY;
-}
-
-int gkWindowGetKey(void *pointer, int key) {
-    if (!pointer || key < 0 || key >= GK_KEY_COUNT) return GK_KEY_RELEASED;
-    return ((GKWindowNative *)pointer)->keys[key];
 }

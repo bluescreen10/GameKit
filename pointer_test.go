@@ -24,15 +24,15 @@ func TestZeroWindowScroll(t *testing.T) {
 	}
 }
 
-func TestZeroWindowCursorMode(t *testing.T) {
+func TestZeroWindowPointerMode(t *testing.T) {
 	window := &Window{}
-	if mode := window.CursorMode(); mode != pointer.CursorNormal {
-		t.Fatalf("zero window cursor mode = %v, want CursorNormal", mode)
+	if mode := window.GetPointerMode(); mode != pointer.Normal {
+		t.Fatalf("zero window cursor mode = %v, want Normal", mode)
 	}
 	// Must not panic.
-	window.DisableCursor()
-	window.EnableCursor()
-	window.SetCursorMode(pointer.CursorHidden)
+	window.DisablePointer()
+	window.EnablePointer()
+	window.SetPointerMode(pointer.Hidden)
 }
 
 // TestNilWindowCallbacks: registering on a nil *Window is a no-op rather than a panic,

@@ -111,8 +111,9 @@ func windowFromHandle(h C.uintptr_t) *Window {
 }
 
 // The C layer calls these for every event, whether or not a callback is registered —
-// see the note in window_bridge.h. Each reads its callback under the lock and releases
-// it before invoking, so a callback is free to call back into the window.
+// see the note in window_bridge.h. Key and button dispatch update Window's polling
+// state first. Every path releases the lock before invoking user code, so callbacks
+// are free to call back into the window.
 
 //export gkGoKeyEvent
 func gkGoKeyEvent(h C.uintptr_t, key, scancode, action, mods C.int) {
@@ -120,12 +121,7 @@ func gkGoKeyEvent(h C.uintptr_t, key, scancode, action, mods C.int) {
 	if w == nil {
 		return
 	}
-	w.mu.RLock()
-	cb := w.keyCallback
-	w.mu.RUnlock()
-	if cb != nil {
-		cb(w, keyboard.Key(key), int(scancode), keyboard.KeyAction(action), keyboard.ModifierKey(mods))
-	}
+	w.dispatchKey(keyboard.Key(key), int(scancode), keyboard.KeyAction(action), keyboard.ModifierKey(mods))
 }
 
 //export gkGoCharEvent
@@ -162,12 +158,7 @@ func gkGoPointerButtonEvent(h C.uintptr_t, button, action, mods C.int) {
 	if w == nil {
 		return
 	}
-	w.mu.RLock()
-	cb := w.pointerButtonCallback
-	w.mu.RUnlock()
-	if cb != nil {
-		cb(w, pointer.Button(button), pointer.ButtonAction(action), keyboard.ModifierKey(mods))
-	}
+	w.dispatchPointerButton(pointer.Button(button), pointer.ButtonAction(action), keyboard.ModifierKey(mods))
 }
 
 // newWindowHandle allocates the cgo.Handle naming w to the C layer, and

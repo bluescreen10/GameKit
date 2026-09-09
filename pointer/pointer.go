@@ -39,21 +39,21 @@ const (
 // are keyboard state, and duplicating the type here would mean two spellings of the
 // same bitmask.
 
-// CursorMode selects how the pointer behaves over a window.
-type CursorMode int
+// Mode selects how the pointer behaves over a window.
+type Mode int
 
 const (
 	// CursorNormal shows the cursor and lets it leave the window.
-	CursorNormal CursorMode = iota
+	Normal Mode = iota
 
-	// CursorHidden hides the cursor while it is over the window but otherwise leaves
+	// Hidden hides the pointer while it is over the window but otherwise leaves
 	// it alone — it still moves, and can still leave.
-	CursorHidden
+	Hidden
 
-	// CursorDisabled hides the cursor and locks it to the window, reporting unbounded
+	// Disabled hides the pointer and locks it to the window, reporting unbounded
 	// virtual motion instead of a screen position. This is what a first-person camera
 	// wants: the pointer never hits the edge of the display, so there is no limit to
 	// how far the view can turn. Window.GetPointerPos then returns an accumulated
 	// virtual position rather than a coordinate inside the window.
-	CursorDisabled
+	Disabled
 )

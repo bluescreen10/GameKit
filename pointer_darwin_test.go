@@ -23,8 +23,8 @@ func TestCocoaPointerInitialState(t *testing.T) {
 	if x, y := cocoaTestWindow.GetScroll(); x != 0 || y != 0 {
 		t.Errorf("scroll = (%v, %v) on a new window, want (0, 0)", x, y)
 	}
-	if mode := cocoaTestWindow.CursorMode(); mode != pointer.CursorNormal {
-		t.Errorf("cursor mode = %v on a new window, want CursorNormal", mode)
+	if mode := cocoaTestWindow.GetPointerMode(); mode != pointer.Normal {
+		t.Errorf("cursor mode = %v on a new window, want Normal", mode)
 	}
 }
 
@@ -41,26 +41,26 @@ func TestCocoaPointerButtonOutOfRange(t *testing.T) {
 	}
 }
 
-// TestCocoaCursorModeRoundTrips checks the mode actually reaches the native layer and
+// TestCocoaPointerModeRoundTrips checks the mode actually reaches the native layer and
 // comes back.
 //
-// CursorDisabled is deliberately not exercised: it calls
+// Disabled is deliberately not exercised: it calls
 // CGAssociateMouseAndMouseCursorPosition(false), which detaches the pointer for the
 // whole system, and a test that failed midway would leave the developer's mouse frozen.
-// CursorHidden takes the same path through gkWindowSetCursorMode without that risk.
-func TestCocoaCursorModeRoundTrips(t *testing.T) {
+// Hidden takes the same path through gkWindowSetCursorMode without that risk.
+func TestCocoaPointerModeRoundTrips(t *testing.T) {
 	if cocoaTestWindowError != nil {
 		t.Fatal(cocoaTestWindowError)
 	}
-	defer cocoaTestWindow.EnableCursor()
+	defer cocoaTestWindow.EnablePointer()
 
-	cocoaTestWindow.SetCursorMode(pointer.CursorHidden)
-	if mode := cocoaTestWindow.CursorMode(); mode != pointer.CursorHidden {
-		t.Fatalf("cursor mode = %v after SetCursorMode(CursorHidden)", mode)
+	cocoaTestWindow.SetPointerMode(pointer.Hidden)
+	if mode := cocoaTestWindow.GetPointerMode(); mode != pointer.Hidden {
+		t.Fatalf("cursor mode = %v after SetPointerMode(Hidden)", mode)
 	}
-	cocoaTestWindow.EnableCursor()
-	if mode := cocoaTestWindow.CursorMode(); mode != pointer.CursorNormal {
-		t.Fatalf("cursor mode = %v after EnableCursor", mode)
+	cocoaTestWindow.EnablePointer()
+	if mode := cocoaTestWindow.GetPointerMode(); mode != pointer.Normal {
+		t.Fatalf("cursor mode = %v after EnablePointer", mode)
 	}
 }
 
