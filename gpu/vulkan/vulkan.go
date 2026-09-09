@@ -38,7 +38,10 @@ type Backend struct {
 	// maxAnisotropy is the device's maxSamplerAnisotropy limit, cached at Init so
 	// CreateSampler can clamp to it — callers ask for the quality they want and
 	// get whatever the hardware can actually do.
-	maxAnisotropy  float32
+	maxAnisotropy float32
+	// maxDataSize is the device's push-constant limit, reported by GetMaxDataSize
+	// and used to size the shared pipeline layout's push range.
+	maxDataSize    int32
 	physicalDevice C.VkPhysicalDevice
 	device         C.VkDevice
 	queue          C.VkQueue
@@ -131,6 +134,7 @@ func (b *Backend) Init() error {
 		return fmt.Errorf("vulkan: create device failed (%d)", int(r))
 	}
 	b.maxAnisotropy = float32(C.vkbMaxAnisotropy(b.physicalDevice))
+	b.maxDataSize = int32(C.vkbMaxPushConstantsSize(b.physicalDevice))
 	if err := b.initBindless(); err != nil {
 		C.vkDestroyDevice(b.device, nil)
 		C.vkDestroyInstance(b.instance, nil)
@@ -189,3 +193,6 @@ func (b *Backend) APIVersion() (uint32, uint32, uint32) {
 	v := uint32(C.vkbApiVersion(b.physicalDevice))
 	return (v >> 22) & 0x7F, (v >> 12) & 0x3FF, v & 0xFFF
 }
+
+// GetMaxDataSize is the largest draw/dispatch data this device accepts, in bytes.
+func (b *Backend) GetMaxDataSize() int32 { return b.maxDataSize }

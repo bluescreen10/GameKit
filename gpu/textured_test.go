@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/utils"
 )
 
 // texVertex matches Vtx in textured.vert (vec2 pos, vec2 uv).
@@ -65,10 +66,10 @@ func TestBindlessTexture(t *testing.T) {
 		Color: []gpu.ColorAttachment{{Texture: color, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 0, 1}}},
 	})
 	cmd.SetPipeline(pipe)
-	cmd.Root(root.Addr)
-	cmd.Viewport(0, 0, size, size, 0, 1)
-	cmd.Scissor(0, 0, size, size)
-	cmd.Draw(6, 1, 0, 0)
+	rootAddr := root.Addr
+	cmd.SetViewport(0, 0, size, size, 0, 1)
+	cmd.SetScissor(0, 0, size, size)
+	cmd.Draw(utils.ToBytes(&rootAddr), 6, 1, 0, 0)
 	cmd.EndRenderPass()
 	cmd.CopyTextureToBuffer(readback, color, 0, 0)
 	f := b.Submit(cmd)

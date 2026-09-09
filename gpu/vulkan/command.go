@@ -6,6 +6,8 @@ package vulkan
 import "C"
 
 import (
+	"unsafe"
+
 	"fmt"
 
 	"github.com/bluescreen10/gamekit/gpu"
@@ -217,39 +219,64 @@ func (c *cmdBuffer) SetPipeline(p gpu.Pipeline) {
 	C.vkCmdBindPipeline(c.cb, e.bindPoint, e.pipe)
 }
 
-func (c *cmdBuffer) Root(addr uint64) { C.vkbPush(c.cb, c.b.pipelineLayout, C.uint64_t(addr)) }
+// push records the draw/dispatch data as push constants. Vulkan requires the size to
+// be a multiple of 4, and the copy happens here so the caller's slice need not outlive
+// the call.
+func (c *cmdBuffer) push(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	size := len(data) &^ 3 // round down to a multiple of 4; Vulkan rejects the rest
+	if size == 0 {
+		return
+	}
+	C.vkbPush(c.cb, c.b.pipelineLayout, unsafe.Pointer(&data[0]), C.uint32_t(size))
+}
 
-func (c *cmdBuffer) Viewport(x, y, width, height, minDepth, maxDepth float32) {
+func (c *cmdBuffer) SetViewport(x, y, width, height, minDepth, maxDepth float32) {
 	vp := C.VkViewport{x: C.float(x), y: C.float(y), width: C.float(width), height: C.float(height),
 		minDepth: C.float(minDepth), maxDepth: C.float(maxDepth)}
 	C.vkCmdSetViewport(c.cb, 0, 1, &vp)
 }
 
-func (c *cmdBuffer) Scissor(x, y, width, height int32) {
+func (c *cmdBuffer) SetScissor(x, y, width, height int32) {
 	sc := C.VkRect2D{offset: C.VkOffset2D{x: C.int32_t(x), y: C.int32_t(y)},
 		extent: C.VkExtent2D{width: C.uint32_t(width), height: C.uint32_t(height)}}
 	C.vkCmdSetScissor(c.cb, 0, 1, &sc)
 }
 
-func (c *cmdBuffer) Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32) {
+func (c *cmdBuffer) Draw(data []byte, vertexCount, instanceCount, firstVertex, firstInstance uint32) {
+	c.push(data)
 	C.vkCmdDraw(c.cb, C.uint32_t(vertexCount), C.uint32_t(instanceCount), C.uint32_t(firstVertex), C.uint32_t(firstInstance))
 }
 
-func (c *cmdBuffer) DrawIndexed(indexBuf gpu.Buffer, indexCount, instanceCount, firstIndex uint32, vertexOffset int32, firstInstance uint32) {
-	C.vkCmdBindIndexBuffer(c.cb, c.b.bufRaw(indexBuf), 0, C.VK_INDEX_TYPE_UINT32)
+// vkIndexType maps the RHI's index width to Vulkan's enum.
+func vkIndexType(t gpu.IndexType) C.VkIndexType {
+	if t == gpu.IndexUint16 {
+		return C.VK_INDEX_TYPE_UINT16
+	}
+	return C.VK_INDEX_TYPE_UINT32
+}
+
+func (c *cmdBuffer) DrawIndexed(data []byte, indexBuf gpu.Buffer, indexType gpu.IndexType, indexCount, instanceCount, firstIndex uint32, vertexOffset int32, firstInstance uint32) {
+	c.push(data)
+	C.vkCmdBindIndexBuffer(c.cb, c.b.bufRaw(indexBuf), 0, vkIndexType(indexType))
 	C.vkCmdDrawIndexed(c.cb, C.uint32_t(indexCount), C.uint32_t(instanceCount), C.uint32_t(firstIndex), C.int32_t(vertexOffset), C.uint32_t(firstInstance))
 }
 
-func (c *cmdBuffer) DrawIndexedIndirect(indexBuf, args gpu.Buffer, argsOffset uint64, drawCount, stride uint32) {
-	C.vkCmdBindIndexBuffer(c.cb, c.b.bufRaw(indexBuf), 0, C.VK_INDEX_TYPE_UINT32)
+func (c *cmdBuffer) DrawIndexedIndirect(data []byte, indexBuf gpu.Buffer, indexType gpu.IndexType, args gpu.Buffer, argsOffset uint64, drawCount, stride uint32) {
+	c.push(data)
+	C.vkCmdBindIndexBuffer(c.cb, c.b.bufRaw(indexBuf), 0, vkIndexType(indexType))
 	C.vkCmdDrawIndexedIndirect(c.cb, c.b.bufRaw(args), C.VkDeviceSize(argsOffset), C.uint32_t(drawCount), C.uint32_t(stride))
 }
 
-func (c *cmdBuffer) Dispatch(x, y, z uint32) {
+func (c *cmdBuffer) Dispatch(data []byte, x, y, z uint32) {
+	c.push(data)
 	C.vkCmdDispatch(c.cb, C.uint32_t(x), C.uint32_t(y), C.uint32_t(z))
 }
 
-func (c *cmdBuffer) DispatchIndirect(args gpu.Buffer, offset uint64) {
+func (c *cmdBuffer) DispatchIndirect(data []byte, args gpu.Buffer, offset uint64) {
+	c.push(data)
 	C.vkCmdDispatchIndirect(c.cb, c.b.bufRaw(args), C.VkDeviceSize(offset))
 }
 

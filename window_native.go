@@ -3,6 +3,7 @@
 package gamekit
 
 /*
+#cgo darwin CFLAGS: -x objective-c
 #cgo darwin LDFLAGS: -framework Cocoa
 #cgo linux LDFLAGS: -lX11
 #cgo windows LDFLAGS: -luser32 -lgdi32

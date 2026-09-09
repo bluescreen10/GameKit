@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/utils"
 )
 
 // vertex matches Vertex in testdata/common.glsl (scalar layout, 20 bytes).
@@ -56,10 +57,10 @@ func TestTriangle(t *testing.T) {
 		Color: []gpu.ColorAttachment{{Texture: target, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 0, 1}}},
 	})
 	cmd.SetPipeline(pipe)
-	cmd.Root(rb.Addr)
-	cmd.Viewport(0, 0, size, size, 0, 1)
-	cmd.Scissor(0, 0, size, size)
-	cmd.Draw(3, 1, 0, 0)
+	rootAddr := rb.Addr
+	cmd.SetViewport(0, 0, size, size, 0, 1)
+	cmd.SetScissor(0, 0, size, size)
+	cmd.Draw(utils.ToBytes(&rootAddr), 3, 1, 0, 0)
 	cmd.EndRenderPass()
 	cmd.CopyTextureToBuffer(readback, target, 0, 0)
 	f := b.Submit(cmd)

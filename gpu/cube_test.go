@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/utils"
 )
 
 // vertex3D matches Vertex3D in testdata/mesh.vert (scalar, 24 bytes).
@@ -81,10 +82,10 @@ func TestCube(t *testing.T) {
 		Depth: &gpu.DepthAttachment{Texture: depth, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: 1.0},
 	})
 	cmd.SetPipeline(pipe)
-	cmd.Root(rb.Addr)
-	cmd.Viewport(0, 0, size, size, 0, 1)
-	cmd.Scissor(0, 0, size, size)
-	cmd.DrawIndexed(ib, uint32(len(indices)), 1, 0, 0, 0)
+	rootAddr := rb.Addr
+	cmd.SetViewport(0, 0, size, size, 0, 1)
+	cmd.SetScissor(0, 0, size, size)
+	cmd.DrawIndexed(utils.ToBytes(&rootAddr), ib, gpu.IndexUint32, uint32(len(indices)), 1, 0, 0, 0)
 	cmd.EndRenderPass()
 	cmd.CopyTextureToBuffer(readback, color, 0, 0)
 	f := b.Submit(cmd)

@@ -163,6 +163,29 @@ const (
 )
 
 // Topology is the primitive assembly mode.
+// IndexType is the width of the entries in an index buffer.
+//
+// 8-bit indices are deliberately absent. Vulkan can do them (VK_KHR_index_type_uint8)
+// but Metal's MTLIndexType has only 16- and 32-bit, so exposing them would mean an RHI
+// value that cannot be implemented on every backend.
+type IndexType uint8
+
+const (
+	// IndexUint32 is first so it is the zero value: it is what every existing index
+	// buffer uses, so a forgotten field defaults to reading them correctly rather
+	// than misinterpreting 32-bit data as 16-bit.
+	IndexUint32 IndexType = iota
+	IndexUint16
+)
+
+// Size is the width of one index in bytes.
+func (t IndexType) Size() uint32 {
+	if t == IndexUint16 {
+		return 2
+	}
+	return 4
+}
+
 type Topology uint8
 
 const (
@@ -394,6 +417,14 @@ type Backend interface {
 	ReadTimestamps(pool QueryPool, count uint32) []uint64
 	TimestampPeriod() float64 // nanoseconds per timestamp tick
 
+	// GetMaxDataSize is the largest `data` a draw or dispatch accepts, in bytes.
+	//
+	// It varies widely by driver rather than by hardware — the same Apple GPU reports
+	// 4096 through MoltenVK and 256 through KosmicKrisp — so it must be queried, not
+	// assumed. Anything that does not fit goes in a buffer with its address passed in
+	// data instead.
+	GetMaxDataSize() int32
+
 	Destroy()
 }
 
@@ -409,23 +440,36 @@ type CommandBuffer interface {
 	// pipeline's own kind (no separate bind-point call).
 	SetPipeline(Pipeline)
 
-	// Root sets the single 64-bit root pointer (push constant) that shaders
-	// dereference for all their data. Call after Bind, before draw/dispatch.
-	Root(addr uint64)
-
 	// Dynamic state.
-	Viewport(x, y, width, height, minDepth, maxDepth float32)
-	Scissor(x, y, width, height int32)
+	SetViewport(x, y, width, height, minDepth, maxDepth float32)
+	SetScissor(x, y, width, height int32)
 
-	// Draws. No vertex/index buffer bindings — shaders load geometry from
-	// buffers via the root pointer / BDA. Index buffer, when used, is an address.
-	Draw(vertexCount, instanceCount, firstVertex, firstInstance uint32)
-	DrawIndexed(indexBuf Buffer, indexCount, instanceCount, firstIndex uint32, vertexOffset int32, firstInstance uint32)
-	DrawIndexedIndirect(indexBuf, args Buffer, argsOffset uint64, drawCount, stride uint32)
+	// Every draw and dispatch carries its own `data`: the bytes the shader reads as
+	// push constants. Use utils.ToBytes to pass a struct.
+	//
+	// It is a parameter rather than sticky state on purpose. Bound state that
+	// persists between draws is a standing invitation to forget it and silently
+	// inherit the previous draw's parameters — the failure renders, it just renders
+	// wrong. Passing it per call makes that impossible to express.
+	//
+	// data must not exceed Backend.GetMaxDataSize(). Anything larger belongs in a
+	// buffer, with its device address passed in data instead; that is also the right
+	// shape for anything a shader only reads conditionally, since an address costs 8
+	// bytes whatever it points at.
+	//
+	// The bytes are copied while the command records, so data need not outlive the
+	// call. nil is valid for shaders that read nothing.
+	//
+	// No vertex/index buffer bindings — shaders load geometry from buffers by
+	// address. The index buffer, where used, is still bound because indexing is
+	// fixed-function.
+	Draw(data []byte, vertexCount, instanceCount, firstVertex, firstInstance uint32)
+	DrawIndexed(data []byte, indexBuf Buffer, indexType IndexType, indexCount, instanceCount, firstIndex uint32, vertexOffset int32, firstInstance uint32)
+	DrawIndexedIndirect(data []byte, indexBuf Buffer, indexType IndexType, args Buffer, argsOffset uint64, drawCount, stride uint32)
 
 	// Compute. Dimensions are workgroup counts; local sizes belong to the shader.
-	Dispatch(x, y, z uint32)
-	DispatchIndirect(args Buffer, offset uint64)
+	Dispatch(data []byte, x, y, z uint32)
+	DispatchIndirect(data []byte, args Buffer, offset uint64)
 
 	// Barrier orders producer→consumer stages on the queue (no resource lists).
 	Barrier(src, dst Stage, flags BarrierFlags)

@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/utils"
 )
 
 // drawIndexedIndirect mirrors VkDrawIndexedIndirectCommand (20 bytes).
@@ -66,8 +67,8 @@ func TestComputeIndirect(t *testing.T) {
 
 	cmd := b.Begin()
 	cmd.SetPipeline(comp)
-	cmd.Root(cRoot.Addr)
-	cmd.Dispatch(1, 1, 1)
+	computeRoot := cRoot.Addr
+	cmd.Dispatch(utils.ToBytes(&computeRoot), 1, 1, 1)
 	// Order the compute writes before the indirect fetch + vertex/index read.
 	cmd.Barrier(gpu.StageCompute, gpu.StageIndirect|gpu.StageVertex, 0)
 
@@ -75,10 +76,10 @@ func TestComputeIndirect(t *testing.T) {
 		Color: []gpu.ColorAttachment{{Texture: target, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 0, 1}}},
 	})
 	cmd.SetPipeline(gfx)
-	cmd.Root(gRoot.Addr)
-	cmd.Viewport(0, 0, size, size, 0, 1)
-	cmd.Scissor(0, 0, size, size)
-	cmd.DrawIndexedIndirect(ib, indirect, 0, 1, 20)
+	graphicsRoot := gRoot.Addr
+	cmd.SetViewport(0, 0, size, size, 0, 1)
+	cmd.SetScissor(0, 0, size, size)
+	cmd.DrawIndexedIndirect(utils.ToBytes(&graphicsRoot), ib, gpu.IndexUint32, indirect, 0, 1, 20)
 	cmd.EndRenderPass()
 	cmd.CopyTextureToBuffer(readback, target, 0, 0)
 	f := b.Submit(cmd)

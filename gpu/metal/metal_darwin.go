@@ -335,39 +335,55 @@ func (c *command) BeginRenderPass(r gpu.RenderTargets) {
 }
 func (c *command) EndRenderPass()             { c.call(C.MBRenderEnd, &C.MBArgs{}) }
 func (c *command) SetPipeline(p gpu.Pipeline) { a := args(uint64(p.H)); c.call(C.MBSetPipeline, &a) }
-func (c *command) Root(addr uint64)           { a := args(addr); c.call(C.MBRoot, &a) }
-func (c *command) Viewport(x, y, w, h, min, max float32) {
+
+// withData attaches the draw/dispatch data to an argument block. MBArgs.p is for
+// pointers borrowed only for the duration of the call, which is exactly right here:
+// setBytes copies into the command buffer before the call returns.
+func withData(a *C.MBArgs, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	a.p[0] = unsafe.Pointer(&data[0])
+	a.u[29] = C.uint64_t(len(data))
+}
+
+func (c *command) SetViewport(x, y, w, h, min, max float32) {
 	a := args()
 	for i, v := range []float32{x, y, w, h, min, max} {
 		a.f[i] = C.double(v)
 	}
 	c.call(C.MBViewport, &a)
 }
-func (c *command) Scissor(x, y, w, h int32) {
+func (c *command) SetScissor(x, y, w, h int32) {
 	if x < 0 || y < 0 || w < 0 || h < 0 {
 		panic("metal: negative scissor")
 	}
 	a := args(uint64(x), uint64(y), uint64(w), uint64(h))
 	c.call(C.MBScissor, &a)
 }
-func (c *command) Draw(n, i, v, base uint32) {
+func (c *command) Draw(data []byte, n, i, v, base uint32) {
 	a := args(uint64(n), uint64(i), uint64(v), uint64(base))
+	withData(&a, data)
 	c.call(C.MBDraw, &a)
 }
-func (c *command) DrawIndexed(b gpu.Buffer, n, i, first uint32, off int32, base uint32) {
-	a := args(uint64(b.H), uint64(n), uint64(i), uint64(first), uint64(int64(off)), uint64(base))
+func (c *command) DrawIndexed(data []byte, b gpu.Buffer, it gpu.IndexType, n, i, first uint32, off int32, base uint32) {
+	a := args(uint64(b.H), uint64(n), uint64(i), uint64(first), uint64(int64(off)), uint64(base), uint64(it.Size()))
+	withData(&a, data)
 	c.call(C.MBIndexed, &a)
 }
-func (c *command) DrawIndexedIndirect(b, a gpu.Buffer, off uint64, n, stride uint32) {
-	v := args(uint64(b.H), uint64(a.H), off, uint64(n), uint64(stride))
+func (c *command) DrawIndexedIndirect(data []byte, b gpu.Buffer, it gpu.IndexType, a gpu.Buffer, off uint64, n, stride uint32) {
+	v := args(uint64(b.H), uint64(a.H), off, uint64(n), uint64(stride), uint64(it.Size()))
+	withData(&v, data)
 	c.call(C.MBIndirect, &v)
 }
-func (c *command) Dispatch(x, y, z uint32) {
+func (c *command) Dispatch(data []byte, x, y, z uint32) {
 	a := args(uint64(x), uint64(y), uint64(z))
+	withData(&a, data)
 	c.call(C.MBDispatch, &a)
 }
-func (c *command) DispatchIndirect(b gpu.Buffer, off uint64) {
+func (c *command) DispatchIndirect(data []byte, b gpu.Buffer, off uint64) {
 	a := args(uint64(b.H), off)
+	withData(&a, data)
 	c.call(C.MBDispatchIndirect, &a)
 }
 func (c *command) Barrier(src, dst gpu.Stage, f gpu.BarrierFlags) { c.call(C.MBBarrier, &C.MBArgs{}) }
@@ -392,3 +408,10 @@ func (c *command) WriteTimestamp(p gpu.QueryPool, i uint32, s gpu.Stage) {
 	a := args(uint64(p.H), uint64(i), uint64(s))
 	c.call(C.MBTimestamp, &a)
 }
+
+// GetMaxDataSize is the largest draw/dispatch data this device accepts, in bytes.
+//
+// Metal's setBytes: is documented for data under 4 KB; past that Apple directs callers
+// to an MTLBuffer instead. There is no queryable device property for it, so the
+// documented threshold is the limit.
+func (b *Backend) GetMaxDataSize() int32 { return 4096 }

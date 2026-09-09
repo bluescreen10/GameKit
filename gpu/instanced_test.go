@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/utils"
 )
 
 // gpuDrawable matches Drawable in testdata/instanced.{comp,vert} (scalar, 20 bytes).
@@ -123,18 +124,18 @@ func renderInstances(b gpu.Backend, size int, offsets [][3]float32, eye vec3) (p
 	readback := b.Alloc(uint64(size*size*4), gpu.MemoryHost, "readback")
 	cmd := b.Begin()
 	cmd.SetPipeline(cull)
-	cmd.Root(cr.Addr)
-	cmd.Dispatch(uint32((n+63)/64), 1, 1)
+	rootAddr := cr.Addr
+	cmd.Dispatch(utils.ToBytes(&rootAddr), uint32((n+63)/64), 1, 1)
 	cmd.Barrier(gpu.StageCompute, gpu.StageIndirect|gpu.StageVertex, 0)
 	cmd.BeginRenderPass(gpu.RenderTargets{
 		Color: []gpu.ColorAttachment{{Texture: color, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 0, 1}}},
 		Depth: &gpu.DepthAttachment{Texture: depth, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: 1.0},
 	})
 	cmd.SetPipeline(draw)
-	cmd.Root(dr.Addr)
-	cmd.Viewport(0, 0, float32(size), float32(size), 0, 1)
-	cmd.Scissor(0, 0, int32(size), int32(size))
-	cmd.DrawIndexedIndirect(idx, indirect, 0, 1, 20)
+	rootAddr = dr.Addr
+	cmd.SetViewport(0, 0, float32(size), float32(size), 0, 1)
+	cmd.SetScissor(0, 0, int32(size), int32(size))
+	cmd.DrawIndexedIndirect(utils.ToBytes(&rootAddr), idx, gpu.IndexUint32, indirect, 0, 1, 20)
 	cmd.EndRenderPass()
 	cmd.CopyTextureToBuffer(readback, color, 0, 0)
 	f := b.Submit(cmd)

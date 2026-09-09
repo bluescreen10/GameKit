@@ -10,6 +10,7 @@ import (
 
 	"github.com/bluescreen10/gamekit/gpu"
 	"github.com/bluescreen10/gamekit/gpu/metal"
+	"github.com/bluescreen10/gamekit/utils"
 )
 
 func encodedShader(code []byte, group [3]uint32) []byte {
@@ -88,10 +89,10 @@ func TestDispatchIndirectAndEntries(t *testing.T) {
 	copy(unsafe.Slice((*uint32)(args.Ptr), 4), []uint32{99, 3, 2, 1})
 	c := b.Begin()
 	c.SetPipeline(p)
-	c.Root(root.Addr)
-	c.DispatchIndirect(args, 4)
+	rootAddr := root.Addr
+	c.DispatchIndirect(utils.ToBytes(&rootAddr), args, 4)
 	c.Barrier(gpu.StageCompute, gpu.StageCompute, 0)
-	c.Dispatch(1, 1, 1)
+	c.Dispatch(utils.ToBytes(&rootAddr), 1, 1, 1)
 	b.Wait(b.Submit(c))
 	if got := *(*uint32)(value.Ptr); got != 56 {
 		t.Fatalf("dispatch executed %d threads, want 56", got)
@@ -147,12 +148,12 @@ func TestRenderPassSplit(t *testing.T) {
 	c := b.Begin()
 	c.BeginRenderPass(gpu.RenderTargets{Color: []gpu.ColorAttachment{{Texture: target, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 1, 1}}}})
 	c.SetPipeline(pipe)
-	c.Viewport(0, 0, 8, 8, 0, 1)
-	c.Scissor(0, 0, 4, 8)
-	c.Draw(3, 1, 0, 0)
+	c.SetViewport(0, 0, 8, 8, 0, 1)
+	c.SetScissor(0, 0, 4, 8)
+	c.Draw(nil, 3, 1, 0, 0)
 	c.Barrier(gpu.StageFragment, gpu.StageFragment, 0)
 	c.WriteTimestamp(pool, 0, gpu.StageColorOutput)
-	c.Draw(3, 1, 0, 0)
+	c.Draw(nil, 3, 1, 0, 0)
 	c.EndRenderPass()
 	c.CopyTextureToBuffer(read, target, 0, 0)
 	b.Wait(b.Submit(c))

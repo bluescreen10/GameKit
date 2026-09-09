@@ -287,6 +287,7 @@ void *gkWindowCreate(const char *title, int width, int height, uint32_t flags,
         native->delegate = [[GKWindowDelegate alloc] init];
         native->delegate.owner = native;
         [window setDelegate:native->delegate];
+        [window setAcceptsMouseMovedEvents:YES];
         GKContentView *content = [[GKContentView alloc] initWithFrame:[[window contentView] frame]];
         [content setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
         [window setContentView:content];

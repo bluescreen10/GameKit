@@ -178,26 +178,31 @@ static void prepareWork(MBDevice *b,MBCommand *c) {
  }
  [c.pendingQueries removeAllObjects];
 }
-static void bindings(MBDevice *b,MBCommand *c) {
- uint64_t root=c.root;
+// bindings pushes the draw/dispatch data inline with setBytes, Metal's equivalent of
+// push constants. The data belongs to the call rather than to the encoder, so it is
+// passed in rather than read from sticky state — a draw that supplies none pushes
+// nothing rather than silently inheriting the previous draw's.
+static void bindings(MBDevice *b,MBCommand *c,const void *data,uint32_t size) {
+ if(!data || size==0) return;
+ require(size<=4096,@"draw/dispatch data exceeds Metal's 4KB setBytes limit");
  if(c.render) {
-  [c.render setVertexBytes:&root length:8 atIndex:0]; [c.render setFragmentBytes:&root length:8 atIndex:0];
+  [c.render setVertexBytes:data length:size atIndex:0]; [c.render setFragmentBytes:data length:size atIndex:0];
  }
- if(c.compute) [c.compute setBytes:&root length:8 atIndex:0];
+ if(c.compute) [c.compute setBytes:data length:size atIndex:0];
 }
-static void compute(MBDevice *b,MBCommand *c) {
+static void compute(MBDevice *b,MBCommand *c,const void *data,uint32_t size) {
  require(!c.render && c.pipeline.kind==5,@"dispatch requires a compute pipeline outside a render pass");
  if(!c.compute) {
   endBlit(c); c.compute=[c.buffer computeCommandEncoder]; require(c.compute!=nil,@"cannot create compute encoder"); residency(b,c);
   [c.compute setBuffer:c.textureTable offset:0 atIndex:1]; [c.compute setBuffer:c.samplerTable offset:0 atIndex:2]; [c.compute setBuffer:c.textureTable offset:0 atIndex:3];
  }
- [c.compute setComputePipelineState:c.pipeline.object]; bindings(b,c);
+ [c.compute setComputePipelineState:c.pipeline.object]; bindings(b,c,data,size);
 }
-static void draw(MBDevice *b,MBCommand *c) {
+static void draw(MBDevice *b,MBCommand *c,const void *data,uint32_t size) {
  require(c.render && c.pipeline.kind==4,@"draw requires a graphics pipeline and render pass");
  require(!c.readOnlyDepth || !c.pipeline.depthWrite,@"depth-writing pipeline in read-only depth pass");
  [c.render setRenderPipelineState:c.pipeline.object]; [c.render setDepthStencilState:c.pipeline.auxiliary];
- [c.render setCullMode:c.pipeline.cull]; [c.render setFrontFacingWinding:c.pipeline.clockwise?MTLWindingClockwise:MTLWindingCounterClockwise]; bindings(b,c);
+ [c.render setCullMode:c.pipeline.cull]; [c.render setFrontFacingWinding:c.pipeline.clockwise?MTLWindingClockwise:MTLWindingCounterClockwise]; bindings(b,c,data,size);
 }
 static id<MTLFunction> function(MBDevice *b,const void *data,NSUInteger size,const void *entry) {
  require(data && size,@"empty shader"); NSError *error=nil; id<MTLLibrary> library=nil;
@@ -361,17 +366,22 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
   if(c.pass.depthAttachment.texture) [c.render setDepthStoreAction:c.pass.depthAttachment.storeAction];
   [c.render endEncoding]; c.render=nil; c.pass=nil; c.hasViewport=NO; c.hasScissor=NO; c.readOnlyDepth=NO; return 0;
  case MBSetPipeline: c.pipeline=resource(b,u[0],0); require(c.pipeline.kind==4||c.pipeline.kind==5,@"invalid pipeline"); return 0;
- case MBRoot: c.root=u[0]; return 0;
  case MBViewport: require(c.render!=nil,@"viewport outside render pass"); c.viewport=(MTLViewport){f[0],f[1],f[2],f[3],f[4],f[5]}; c.hasViewport=YES; [c.render setViewport:c.viewport]; return 0;
  case MBScissor: require(c.render!=nil,@"scissor outside render pass"); c.scissor=(MTLScissorRect){u[0],u[1],u[2],u[3]}; c.hasScissor=YES; [c.render setScissorRect:c.scissor]; return 0;
- case MBDraw: prepareWork(b,c); draw(b,c); [c.render drawPrimitives:c.pipeline.topology vertexStart:u[2] vertexCount:u[0] instanceCount:u[1] baseInstance:u[3]]; return 0;
- case MBIndexed: prepareWork(b,c); draw(b,c); [c.render drawIndexedPrimitives:c.pipeline.topology indexCount:u[1] indexType:MTLIndexTypeUInt32 indexBuffer:resource(b,u[0],1).object indexBufferOffset:u[3]*4 instanceCount:u[2] baseVertex:(NSInteger)u[4] baseInstance:u[5]]; return 0;
+ case MBDraw: prepareWork(b,c); draw(b,c,a->p[0],(uint32_t)u[29]); [c.render drawPrimitives:c.pipeline.topology vertexStart:u[2] vertexCount:u[0] instanceCount:u[1] baseInstance:u[3]]; return 0;
+ case MBIndexed: {prepareWork(b,c); draw(b,c,a->p[0],(uint32_t)u[29]);
+  // Metal takes a BYTE offset here, unlike Vulkan which takes an element index and
+  // derives the stride from the bound index type — so firstIndex must be scaled by
+  // the index width rather than a hardcoded 4.
+  MTLIndexType it = u[6]==2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+  [c.render drawIndexedPrimitives:c.pipeline.topology indexCount:u[1] indexType:it indexBuffer:resource(b,u[0],1).object indexBufferOffset:u[3]*u[6] instanceCount:u[2] baseVertex:(NSInteger)u[4] baseInstance:u[5]]; return 0;}
  case MBIndirect: {
-  prepareWork(b,c); draw(b,c); id<MTLBuffer> buf=resource(b,u[1],1).object; require(u[4]>=20 && !(u[4]%4) && !(u[2]%4),@"invalid indirect stride/offset"); require(!u[3] || u[2]+(u[3]-1)*u[4]+20<=buf.length,@"indirect draw out of bounds");
-  for(NSUInteger i=0;i<u[3];i++) [c.render drawIndexedPrimitives:c.pipeline.topology indexType:MTLIndexTypeUInt32 indexBuffer:resource(b,u[0],1).object indexBufferOffset:0 indirectBuffer:buf indirectBufferOffset:u[2]+i*u[4]]; return 0;
+  prepareWork(b,c); draw(b,c,a->p[0],(uint32_t)u[29]); id<MTLBuffer> buf=resource(b,u[1],1).object; require(u[4]>=20 && !(u[4]%4) && !(u[2]%4),@"invalid indirect stride/offset"); require(!u[3] || u[2]+(u[3]-1)*u[4]+20<=buf.length,@"indirect draw out of bounds");
+  MTLIndexType it = u[5]==2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+  for(NSUInteger i=0;i<u[3];i++) [c.render drawIndexedPrimitives:c.pipeline.topology indexType:it indexBuffer:resource(b,u[0],1).object indexBufferOffset:0 indirectBuffer:buf indirectBufferOffset:u[2]+i*u[4]]; return 0;
  }
- case MBDispatch: prepareWork(b,c); compute(b,c); [c.compute dispatchThreadgroups:MTLSizeMake(u[0],u[1],u[2]) threadsPerThreadgroup:c.pipeline.group]; return 0;
- case MBDispatchIndirect: {prepareWork(b,c); compute(b,c); id<MTLBuffer> buf=resource(b,u[0],1).object; require(u[1]%4==0 && u[1]+12<=buf.length,@"indirect dispatch out of bounds"); [c.compute dispatchThreadgroupsWithIndirectBuffer:buf indirectBufferOffset:u[1] threadsPerThreadgroup:c.pipeline.group]; return 0;}
+ case MBDispatch: prepareWork(b,c); compute(b,c,a->p[0],(uint32_t)u[29]); [c.compute dispatchThreadgroups:MTLSizeMake(u[0],u[1],u[2]) threadsPerThreadgroup:c.pipeline.group]; return 0;
+ case MBDispatchIndirect: {prepareWork(b,c); compute(b,c,a->p[0],(uint32_t)u[29]); id<MTLBuffer> buf=resource(b,u[0],1).object; require(u[1]%4==0 && u[1]+12<=buf.length,@"indirect dispatch out of bounds"); [c.compute dispatchThreadgroupsWithIndirectBuffer:buf indirectBufferOffset:u[1] threadsPerThreadgroup:c.pipeline.group]; return 0;}
  case MBBarrier:
   if(c.render) {pauseRender(c); resumeRender(b,c,YES);}
   else {endCompute(c); endBlit(c);} return 0;

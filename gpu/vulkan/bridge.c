@@ -137,6 +137,12 @@
     memcpy(out, p.deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE);
 }
 
+ uint32_t vkbMaxPushConstantsSize(VkPhysicalDevice pd) {
+    VkPhysicalDeviceProperties p;
+    vkGetPhysicalDeviceProperties(pd, &p);
+    return p.limits.maxPushConstantsSize;
+}
+
  float vkbMaxAnisotropy(VkPhysicalDevice pd) {
     VkPhysicalDeviceProperties p;
     vkGetPhysicalDeviceProperties(pd, &p);
@@ -240,12 +246,17 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
         return r;
     }
 
-    // Every pipeline shares this layout: the global set + a 128-byte push
-    // constant. Root() writes the 64-bit root pointer into the first 8 bytes.
+    // Every pipeline shares this layout, with a push constant range sized to what the
+    // device actually permits rather than a fixed guess. It was 128 bytes, which is
+    // smaller than some roots callers legitimately want to pass — and the limit is a
+    // driver policy decision, not a hardware one (the same Apple GPU reports 4096
+    // through MoltenVK and 256 through KosmicKrisp), so it has to be queried.
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(phys, &props);
     VkPushConstantRange pcr = {0};
     pcr.stageFlags = VK_SHADER_STAGE_ALL;
     pcr.offset = 0;
-    pcr.size = 128;
+    pcr.size = props.limits.maxPushConstantsSize;
     VkPipelineLayoutCreateInfo plci = {0};
     plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.setLayoutCount = 1;
@@ -463,8 +474,9 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     vkCmdCopyBufferToImage(cb, buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
 }
 
- void vkbPush(VkCommandBuffer cb, VkPipelineLayout layout, uint64_t root) {
-    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_ALL, 0, sizeof(uint64_t), &root);
+ void vkbPush(VkCommandBuffer cb, VkPipelineLayout layout, const void* data, uint32_t size) {
+    if (!data || size == 0) return;
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_ALL, 0, size, data);
 }
 
 // Buffer memory.

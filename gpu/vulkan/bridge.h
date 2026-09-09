@@ -20,6 +20,7 @@ VkResult vkbCreateDevice(VkPhysicalDevice pd, uint32_t fam, VkDevice* outDev, Vk
 void vkbDeviceName(VkPhysicalDevice pd, char* out);
 
 float vkbMaxAnisotropy(VkPhysicalDevice pd);
+uint32_t vkbMaxPushConstantsSize(VkPhysicalDevice pd);
 
 uint32_t vkbApiVersion(VkPhysicalDevice pd);
 
@@ -110,7 +111,7 @@ void vkbCopyImageToBuffer(VkCommandBuffer cb, VkImage img, VkBuffer buf, uint32_
 void vkbCopyBufferToImage(VkCommandBuffer cb, VkBuffer buf, uint64_t srcOffset, VkImage img,
                                  uint32_t w, uint32_t h, uint32_t mip, uint32_t layer, VkImageAspectFlags aspect);
 
-void vkbPush(VkCommandBuffer cb, VkPipelineLayout layout, uint64_t root);
+void vkbPush(VkCommandBuffer cb, VkPipelineLayout layout, const void* data, uint32_t size);
 
 VkResult vkbAllocBuffer(VkDevice dev, VkPhysicalDevice phys, VkDeviceSize size, int hostVisible,
                                VkBuffer* outBuf, VkDeviceMemory* outMem, void** outPtr, VkDeviceAddress* outAddr);
