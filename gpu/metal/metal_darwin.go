@@ -48,8 +48,8 @@ func (b *Backend) call(op int, a *C.MBArgs) uint64 {
 		}
 	}
 	r := uint64(C.mbCall(b.native, C.int(op), a))
-	if a.error[0] != 0 {
-		panic("metal: " + C.GoString(&a.error[0]))
+	if a.error != 0 {
+		panic("metal: " + C.GoString(C.mbError()))
 	}
 	return r
 }
@@ -77,8 +77,8 @@ func (b *Backend) Init() error {
 	b.native = C.mbCreate()
 	a := args()
 	C.mbCall(b.native, C.MBInit, &a)
-	if a.error[0] != 0 {
-		msg := C.GoString(&a.error[0])
+	if a.error != 0 {
+		msg := C.GoString(C.mbError())
 		C.mbCall(b.native, C.MBDestroy, &C.MBArgs{})
 		b.native = nil
 		return fmt.Errorf("metal: %s", msg)
@@ -242,8 +242,8 @@ func CocoaMetalLayer(window unsafe.Pointer) uintptr {
 	a := args()
 	a.p[0] = window
 	r := uintptr(C.mbCall(nil, C.MBSurface, &a))
-	if a.error[0] != 0 {
-		panic("metal: " + C.GoString(&a.error[0]))
+	if a.error != 0 {
+		panic("metal: " + C.GoString(C.mbError()))
 	}
 	return r
 }

@@ -3,11 +3,14 @@
 #include <stdint.h>
 #include <stddef.h>
 // Synchronous bridge: pointers in Args are borrowed only for the duration of Call.
+// error is a flag, not the message: the text lives in a single buffer reached
+// through mbError. Args is built fresh for every command, so carrying kilobytes
+// of message space in it would cost an allocation and a memclear per draw.
 typedef struct {
     uint64_t u[32];
     double f[8];
     const void *p[4];
-    char error[2048];
+    uint32_t error;
 } MBArgs;
 typedef struct {
     uint64_t color[8];
@@ -33,5 +36,9 @@ enum {
 void *mbCreate(void);
 uint64_t mbCall(void *backend, int op, MBArgs *args);
 void *mbPointer(uint64_t value);
+// mbError returns the message for the call that set MBArgs.error. Like the rest
+// of the bridge it assumes calls are externally serialized, so read it before
+// making another call.
+const char *mbError(void);
 #endif
 

@@ -70,13 +70,19 @@
 @property(retain) id<MTLBuffer> timestampScratch;
 @property(retain) NSMutableIndexSet *textureSlots;
 @property(retain) NSMutableIndexSet *samplerSlots;
+// An MTLResidencySet (macOS 15+) attached to the queue keeps every allocation
+// resident for the queue's lifetime, so encoders need no useResources: call at
+// all. It is held as id to keep the declaration free of availability
+// annotations; residentResources is the pre-15 fallback and stays empty when a
+// set is in use.
+@property(retain) id residencySet;
 @property BOOL residencyDirty;
 @property uint64_t next;
 @end
 @implementation MBDevice
 - (void)dealloc {
  [_fences release]; [_commands release]; [_resources release]; [_residentResources release]; [_residentPointers release]; [_textures release]; [_samplers release]; [_textureSnapshot release]; [_samplerSnapshot release];
- [_timestampScratch release]; [_textureSlots release]; [_samplerSlots release]; [_queue release]; [_device release]; [super dealloc];
+ [_timestampScratch release]; [_textureSlots release]; [_samplerSlots release]; [_residencySet release]; [_queue release]; [_device release]; [super dealloc];
 }
 @end
 static void require(BOOL condition, NSString *message) {
@@ -90,7 +96,8 @@ static uint64_t addWithResidency(MBDevice *b,id obj,NSUInteger kind,BOOL residen
  require(obj!=nil,@"Metal resource creation failed"); MBResource *r=[MBResource new]; r.object=obj; r.kind=kind;
  uint64_t h=++b.next; b.resources[@(h)]=r; [r release];
  if(resident && (kind==1||kind==2)) {
-  [b.residentResources addObject:obj];
+  if(b.residencySet) { if (@available(macOS 15.0,*)) [(id<MTLResidencySet>)b.residencySet addAllocation:(id<MTLAllocation>)obj]; }
+  else [b.residentResources addObject:obj];
   b.residencyDirty=YES;
  }
  return h;
@@ -123,8 +130,18 @@ static void residency(MBDevice *b,MBCommand *c) {
  c.textureTable=b.textureSnapshot;
  c.samplerTable=b.samplerSnapshot;
  require(c.textureTable && c.samplerTable,@"cannot snapshot argument tables");
- // The ABI allows arbitrary pointer chains: conservatively declare all resources,
- // but batch the declaration to avoid one Objective-C call per object and encoder.
+ // The ABI allows arbitrary pointer chains, so every resource has to be declared.
+ // The residency set does that once for the whole queue: re-commit only after the
+ // set actually changed, and the encoders themselves declare nothing.
+ if(b.residencySet) {
+  if(b.residencyDirty) {
+   if (@available(macOS 15.0,*)) { [(id<MTLResidencySet>)b.residencySet commit]; [(id<MTLResidencySet>)b.residencySet requestResidency]; }
+   b.residencyDirty=NO;
+  }
+  return;
+ }
+ // Fallback for macOS 13 and 14: declare everything per encoder, batching the
+ // declaration to avoid one Objective-C call per object and encoder.
  if(b.residencyDirty) {
   b.residentPointers.length=b.residentResources.count*sizeof(id<MTLResource>);
   if(b.residentResources.count) [b.residentResources getObjects:b.residentPointers.mutableBytes range:NSMakeRange(0,b.residentResources.count)];
@@ -226,6 +243,12 @@ static void completedSubmission(MBDevice *b,id<MTLCommandBuffer> cb) {
 }
 static void idle(MBDevice *b) { for(id<MTLCommandBuffer> cb in b.fences.allValues) completedSubmission(b,cb); [b.fences removeAllObjects]; }
 static uint64_t submit(MBDevice *b,uint64_t h,id<CAMetalDrawable> drawable) {
+ // An allocation made after the last encoder was created never reached residency(),
+ // so catch it here: the GPU must not run against an uncommitted set.
+ if(b.residencySet && b.residencyDirty) {
+  if (@available(macOS 15.0,*)) { [(id<MTLResidencySet>)b.residencySet commit]; [(id<MTLResidencySet>)b.residencySet requestResidency]; }
+  b.residencyDirty=NO;
+ }
  MBCommand *c=b.commands[@(h)]; require(c!=nil,@"invalid command buffer"); outside(c);
  endBlit(c);
  if(c.pendingQueries.count) { if(!c.endQueries) c.endQueries=[NSMutableArray array]; [c.endQueries addObjectsFromArray:c.pendingQueries]; [c.pendingQueries removeAllObjects]; }
@@ -251,6 +274,10 @@ static uint64_t submit(MBDevice *b,uint64_t h,id<CAMetalDrawable> drawable) {
 }
 void *mbCreate(void) { return [MBDevice new]; }
 void *mbPointer(uint64_t v) { return (void*)(uintptr_t)v; }
+// The message for the most recent failed call. Only MBArgs.error says whether it
+// is current, so it is never cleared on the success path.
+static char mbErrorText[2048];
+const char *mbError(void) { return mbErrorText; }
 uint64_t mbCall(void *backend,int op,MBArgs *a) {
  @autoreleasepool { @try {
  MBDevice *b=backend; uint64_t *u=a->u; double *f=a->f; const void **p=a->p;
@@ -262,6 +289,12 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
   b.device=[MTLCreateSystemDefaultDevice() autorelease]; require(b.device!=nil,@"no Metal device");
   require(b.device.argumentBuffersSupport==MTLArgumentBuffersTier2 && b.device.hasUnifiedMemory,@"requires a unified-memory GPU with Tier 2 argument buffers");
   b.queue=[[b.device newCommandQueue] autorelease]; require(b.queue!=nil,@"cannot create command queue");
+  if (@available(macOS 15.0,*)) {
+   MTLResidencySetDescriptor *rd=[MTLResidencySetDescriptor new]; rd.label=@"gamekit.residency";
+   NSError *rerr=nil; id<MTLResidencySet> set=[b.device newResidencySetWithDescriptor:rd error:&rerr]; [rd release];
+   // A failure here is not fatal: residency() falls back to useResources:.
+   if(set) { b.residencySet=set; [set release]; [b.queue addResidencySet:set]; }
+  }
   b.resources=[NSMutableDictionary dictionary]; b.residentResources=[NSMutableArray array]; b.residentPointers=[NSMutableData data]; b.residencyDirty=YES;
   b.commands=[NSMutableDictionary dictionary]; b.fences=[NSMutableDictionary dictionary];
   b.textures=[[b.device newBufferWithLength:65536*8 options:MTLResourceStorageModeShared] autorelease];
@@ -282,7 +315,11 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
  case MBFree: case MBRelease: {
   MBResource *r=b.resources[@(u[0])]; if(!r) return 0;
   if(r.slot) { BOOL s=r.kind==3; ((uint64_t*)[(s?b.samplers:b.textures) contents])[r.slot]=0; [(s?b.samplerSlots:b.textureSlots) addIndex:r.slot]; if(s) b.samplerSnapshot=nil; else b.textureSnapshot=nil; }
-  if(r.kind==1||r.kind==2) { [b.residentResources removeObjectIdenticalTo:r.object]; b.residencyDirty=YES; }
+  if(r.kind==1||r.kind==2) {
+   if(b.residencySet) { if (@available(macOS 15.0,*)) [(id<MTLResidencySet>)b.residencySet removeAllocation:(id<MTLAllocation>)r.object]; }
+   else [b.residentResources removeObjectIdenticalTo:r.object];
+   b.residencyDirty=YES;
+  }
   [b.resources removeObjectForKey:@(u[0])]; return 0;
  }
  case MBTexture: {
@@ -378,7 +415,11 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
  case MBIndirect: {
   prepareWork(b,c); draw(b,c,a->p[0],(uint32_t)u[29]); id<MTLBuffer> buf=resource(b,u[1],1).object; require(u[4]>=20 && !(u[4]%4) && !(u[2]%4),@"invalid indirect stride/offset"); require(!u[3] || u[2]+(u[3]-1)*u[4]+20<=buf.length,@"indirect draw out of bounds");
   MTLIndexType it = u[5]==2 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
-  for(NSUInteger i=0;i<u[3];i++) [c.render drawIndexedPrimitives:c.pipeline.topology indexType:it indexBuffer:resource(b,u[0],1).object indexBufferOffset:0 indirectBuffer:buf indirectBufferOffset:u[2]+i*u[4]]; return 0;
+  // Metal has no multi-draw-indirect, so one draw per command is the only option.
+  // The index buffer is the same for all of them: resolving the handle inside the
+  // loop would box an NSNumber and hash the resource table once per command.
+  id<MTLBuffer> ib=resource(b,u[0],1).object;
+  for(NSUInteger i=0;i<u[3];i++) [c.render drawIndexedPrimitives:c.pipeline.topology indexType:it indexBuffer:ib indexBufferOffset:0 indirectBuffer:buf indirectBufferOffset:u[2]+i*u[4]]; return 0;
  }
  case MBDispatch: prepareWork(b,c); compute(b,c,a->p[0],(uint32_t)u[29]); [c.compute dispatchThreadgroups:MTLSizeMake(u[0],u[1],u[2]) threadsPerThreadgroup:c.pipeline.group]; return 0;
  case MBDispatchIndirect: {prepareWork(b,c); compute(b,c,a->p[0],(uint32_t)u[29]); id<MTLBuffer> buf=resource(b,u[0],1).object; require(u[1]%4==0 && u[1]+12<=buf.length,@"indirect dispatch out of bounds"); [c.compute dispatchThreadgroupsWithIndirectBuffer:buf indirectBufferOffset:u[1] threadsPerThreadgroup:c.pipeline.group]; return 0;}
@@ -467,7 +508,7 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
  }
  }
  require(NO,@"unknown bridge operation");
- } @catch(NSException *e) {snprintf(a->error,sizeof(a->error),"%s",e.reason.UTF8String);}
+ } @catch(NSException *e) {snprintf(mbErrorText,sizeof(mbErrorText),"%s",e.reason.UTF8String); a->error=1;}
  return 0;
  }
 }
