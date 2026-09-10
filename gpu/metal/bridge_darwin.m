@@ -17,6 +17,11 @@
 @property BOOL clockwise;
 @property BOOL depthWrite;
 @property MTLSize group;
+// Bytes the shader's root argument occupies, from pipeline reflection. MSL rounds a
+// struct's size up to its alignment (16 if it holds a vec4 or mat4), so a caller
+// packing the same fields more tightly hands setBytes a short buffer and the shader
+// reads past it. Zero when the shader takes no root argument.
+@property NSUInteger rootSize;
 @property MTLTimestamp cpuStart;
 @property MTLTimestamp gpuStart;
 @property(retain) NSMutableDictionary *timestampOverrides;
@@ -70,25 +75,28 @@
 @property(retain) id<MTLBuffer> timestampScratch;
 @property(retain) NSMutableIndexSet *textureSlots;
 @property(retain) NSMutableIndexSet *samplerSlots;
-// An MTLResidencySet (macOS 15+) attached to the queue keeps every allocation
-// resident for the queue's lifetime, so encoders need no useResources: call at
-// all. It is held as id to keep the declaration free of availability
-// annotations; residentResources is the pre-15 fallback and stays empty when a
-// set is in use.
-@property(retain) id residencySet;
 @property BOOL residencyDirty;
 @property uint64_t next;
 @end
 @implementation MBDevice
 - (void)dealloc {
  [_fences release]; [_commands release]; [_resources release]; [_residentResources release]; [_residentPointers release]; [_textures release]; [_samplers release]; [_textureSnapshot release]; [_samplerSnapshot release];
- [_timestampScratch release]; [_textureSlots release]; [_samplerSlots release]; [_residencySet release]; [_queue release]; [_device release]; [super dealloc];
+ [_timestampScratch release]; [_textureSlots release]; [_samplerSlots release]; [_queue release]; [_device release]; [super dealloc];
 }
 @end
 static void require(BOOL condition, NSString *message) {
  if (!condition) [NSException raise:@"MetalRHI" format:@"%@",message];
 }
 static NSString *str(const void *s) {return s ? [NSString stringWithUTF8String:s] : @"";}
+// rootBytes reports how many bytes the shader expects at buffer(0) — the RHI's root
+// argument — or 0 if it binds nothing there.
+static NSUInteger rootBytes(NSArray<id<MTLBinding>> *bindings) {
+ for(id<MTLBinding> x in bindings) {
+  if(x.index==0 && x.type==MTLBindingTypeBuffer && x.used)
+   return [(id<MTLBufferBinding>)x bufferDataSize];
+ }
+ return 0;
+}
 static MBResource *resource(MBDevice *b,uint64_t h,NSUInteger kind) {
  MBResource *r=b.resources[@(h)]; require(r && (!kind || r.kind==kind),@"invalid resource handle or kind"); return r;
 }
@@ -96,8 +104,7 @@ static uint64_t addWithResidency(MBDevice *b,id obj,NSUInteger kind,BOOL residen
  require(obj!=nil,@"Metal resource creation failed"); MBResource *r=[MBResource new]; r.object=obj; r.kind=kind;
  uint64_t h=++b.next; b.resources[@(h)]=r; [r release];
  if(resident && (kind==1||kind==2)) {
-  if(b.residencySet) { if (@available(macOS 15.0,*)) [(id<MTLResidencySet>)b.residencySet addAllocation:(id<MTLAllocation>)obj]; }
-  else [b.residentResources addObject:obj];
+  [b.residentResources addObject:obj];
   b.residencyDirty=YES;
  }
  return h;
@@ -130,18 +137,8 @@ static void residency(MBDevice *b,MBCommand *c) {
  c.textureTable=b.textureSnapshot;
  c.samplerTable=b.samplerSnapshot;
  require(c.textureTable && c.samplerTable,@"cannot snapshot argument tables");
- // The ABI allows arbitrary pointer chains, so every resource has to be declared.
- // The residency set does that once for the whole queue: re-commit only after the
- // set actually changed, and the encoders themselves declare nothing.
- if(b.residencySet) {
-  if(b.residencyDirty) {
-   if (@available(macOS 15.0,*)) { [(id<MTLResidencySet>)b.residencySet commit]; [(id<MTLResidencySet>)b.residencySet requestResidency]; }
-   b.residencyDirty=NO;
-  }
-  return;
- }
- // Fallback for macOS 13 and 14: declare everything per encoder, batching the
- // declaration to avoid one Objective-C call per object and encoder.
+ // The ABI allows arbitrary pointer chains: conservatively declare all resources,
+ // but batch the declaration to avoid one Objective-C call per object and encoder.
  if(b.residencyDirty) {
   b.residentPointers.length=b.residentResources.count*sizeof(id<MTLResource>);
   if(b.residentResources.count) [b.residentResources getObjects:b.residentPointers.mutableBytes range:NSMakeRange(0,b.residentResources.count)];
@@ -202,6 +199,12 @@ static void prepareWork(MBDevice *b,MBCommand *c) {
 static void bindings(MBDevice *b,MBCommand *c,const void *data,uint32_t size) {
  if(!data || size==0) return;
  require(size<=4096,@"draw/dispatch data exceeds Metal's 4KB setBytes limit");
+ // Catch a root argument the shader would read past. MSL rounds a struct's size up
+ // to its alignment, so a caller that packs the same fields to 8-byte alignment
+ // comes up short — silently, until something perturbs what follows the buffer.
+ require(size>=c.pipeline.rootSize,
+   ([NSString stringWithFormat:@"draw/dispatch data is %u bytes but the shader's root argument is %lu; pad it to a multiple of 16",
+     size,(unsigned long)c.pipeline.rootSize]));
  if(c.render) {
   [c.render setVertexBytes:data length:size atIndex:0]; [c.render setFragmentBytes:data length:size atIndex:0];
  }
@@ -243,12 +246,6 @@ static void completedSubmission(MBDevice *b,id<MTLCommandBuffer> cb) {
 }
 static void idle(MBDevice *b) { for(id<MTLCommandBuffer> cb in b.fences.allValues) completedSubmission(b,cb); [b.fences removeAllObjects]; }
 static uint64_t submit(MBDevice *b,uint64_t h,id<CAMetalDrawable> drawable) {
- // An allocation made after the last encoder was created never reached residency(),
- // so catch it here: the GPU must not run against an uncommitted set.
- if(b.residencySet && b.residencyDirty) {
-  if (@available(macOS 15.0,*)) { [(id<MTLResidencySet>)b.residencySet commit]; [(id<MTLResidencySet>)b.residencySet requestResidency]; }
-  b.residencyDirty=NO;
- }
  MBCommand *c=b.commands[@(h)]; require(c!=nil,@"invalid command buffer"); outside(c);
  endBlit(c);
  if(c.pendingQueries.count) { if(!c.endQueries) c.endQueries=[NSMutableArray array]; [c.endQueries addObjectsFromArray:c.pendingQueries]; [c.pendingQueries removeAllObjects]; }
@@ -279,9 +276,11 @@ void *mbPointer(uint64_t v) { return (void*)(uintptr_t)v; }
 static char mbErrorText[2048];
 const char *mbError(void) { return mbErrorText; }
 uint64_t mbCall(void *backend,int op,MBArgs *a) {
- @autoreleasepool { @try {
- MBDevice *b=backend; uint64_t *u=a->u; double *f=a->f; const void **p=a->p;
- MBCommand *c=u[30] ? b.commands[@(u[30])] : nil;
+ @autoreleasepool {
+ MBDevice *b=backend; MBCommand *c=nil;
+ @try {
+ uint64_t *u=a->u; double *f=a->f; const void **p=a->p;
+ c=u[30] ? b.commands[@(u[30])] : nil;
  if(u[30]) require(c!=nil,@"invalid command buffer");
  switch(op) {
  case MBInit: {
@@ -289,12 +288,6 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
   b.device=[MTLCreateSystemDefaultDevice() autorelease]; require(b.device!=nil,@"no Metal device");
   require(b.device.argumentBuffersSupport==MTLArgumentBuffersTier2 && b.device.hasUnifiedMemory,@"requires a unified-memory GPU with Tier 2 argument buffers");
   b.queue=[[b.device newCommandQueue] autorelease]; require(b.queue!=nil,@"cannot create command queue");
-  if (@available(macOS 15.0,*)) {
-   MTLResidencySetDescriptor *rd=[MTLResidencySetDescriptor new]; rd.label=@"gamekit.residency";
-   NSError *rerr=nil; id<MTLResidencySet> set=[b.device newResidencySetWithDescriptor:rd error:&rerr]; [rd release];
-   // A failure here is not fatal: residency() falls back to useResources:.
-   if(set) { b.residencySet=set; [set release]; [b.queue addResidencySet:set]; }
-  }
   b.resources=[NSMutableDictionary dictionary]; b.residentResources=[NSMutableArray array]; b.residentPointers=[NSMutableData data]; b.residencyDirty=YES;
   b.commands=[NSMutableDictionary dictionary]; b.fences=[NSMutableDictionary dictionary];
   b.textures=[[b.device newBufferWithLength:65536*8 options:MTLResourceStorageModeShared] autorelease];
@@ -315,11 +308,7 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
  case MBFree: case MBRelease: {
   MBResource *r=b.resources[@(u[0])]; if(!r) return 0;
   if(r.slot) { BOOL s=r.kind==3; ((uint64_t*)[(s?b.samplers:b.textures) contents])[r.slot]=0; [(s?b.samplerSlots:b.textureSlots) addIndex:r.slot]; if(s) b.samplerSnapshot=nil; else b.textureSnapshot=nil; }
-  if(r.kind==1||r.kind==2) {
-   if(b.residencySet) { if (@available(macOS 15.0,*)) [(id<MTLResidencySet>)b.residencySet removeAllocation:(id<MTLAllocation>)r.object]; }
-   else [b.residentResources removeObjectIdenticalTo:r.object];
-   b.residencyDirty=YES;
-  }
+  if(r.kind==1||r.kind==2) { [b.residentResources removeObjectIdenticalTo:r.object]; b.residencyDirty=YES; }
   [b.resources removeObjectForKey:@(u[0])]; return 0;
  }
  case MBTexture: {
@@ -351,11 +340,12 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
   id<MTLSamplerState> s=[b.device newSamplerStateWithDescriptor:d]; [d release]; uint64_t h=add(b,s,3); [s release]; u[31]=slot(b,resource(b,h,3),YES); return h;
  }
  case MBCompute: {
-  id<MTLFunction> fn=function(b,p[0],u[0],p[1]); NSError *error=nil;
-  id<MTLComputePipelineState> ps=[b.device newComputePipelineStateWithFunction:fn error:&error]; require(ps!=nil,error.localizedDescription);
+  id<MTLFunction> fn=function(b,p[0],u[0],p[1]); NSError *error=nil; MTLComputePipelineReflection *refl=nil;
+  id<MTLComputePipelineState> ps=[b.device newComputePipelineStateWithFunction:fn options:MTLPipelineOptionBindingInfo reflection:&refl error:&error]; require(ps!=nil,error.localizedDescription);
   MTLSize group=MTLSizeMake(MAX(u[1],1),MAX(u[2],1),MAX(u[3],1));
   require(group.width*group.height*group.depth<=ps.maxTotalThreadsPerThreadgroup,@"workgroup too large");
-  uint64_t h=add(b,ps,5); [ps release]; resource(b,h,5).group=group; return h;
+  uint64_t h=add(b,ps,5); [ps release]; MBResource *r=resource(b,h,5);
+  r.group=group; r.rootSize=rootBytes(refl.bindings); return h;
  }
  case MBPipeline: {
   MTLRenderPipelineDescriptor *d=[MTLRenderPipelineDescriptor new];
@@ -370,8 +360,11 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
    t.blendingEnabled=v&1;
    if(v&1) {NSUInteger sc=(v>>5)&15,dc=(v>>9)&15,sa=(v>>17)&15,da=(v>>21)&15; require(sc<6&&dc<6&&sa<6&&da<6,@"invalid blend factor"); t.sourceRGBBlendFactor=factors[sc]; t.destinationRGBBlendFactor=factors[dc]; t.rgbBlendOperation=(v>>13)&15; t.sourceAlphaBlendFactor=factors[sa]; t.destinationAlphaBlendFactor=factors[da]; t.alphaBlendOperation=(v>>25)&15;}
   }
-  NSError *error=nil; id<MTLRenderPipelineState> ps=[b.device newRenderPipelineStateWithDescriptor:d error:&error]; [d release]; require(ps!=nil,error.localizedDescription);
+  NSError *error=nil; MTLRenderPipelineReflection *refl=nil;
+  id<MTLRenderPipelineState> ps=[b.device newRenderPipelineStateWithDescriptor:d options:MTLPipelineOptionBindingInfo reflection:&refl error:&error]; [d release]; require(ps!=nil,error.localizedDescription);
   uint64_t h=add(b,ps,4); [ps release]; MBResource *r=resource(b,h,4);
+  // bindings() pushes the root to both stages, so the larger expectation governs.
+  r.rootSize=MAX(rootBytes(refl.vertexBindings),rootBytes(refl.fragmentBindings));
   MTLDepthStencilDescriptor *depth=[MTLDepthStencilDescriptor new]; depth.depthCompareFunction=u[7]?u[9]:MTLCompareFunctionAlways; depth.depthWriteEnabled=u[8];
   r.auxiliary=[[b.device newDepthStencilStateWithDescriptor:depth] autorelease]; [depth release];
   const MTLPrimitiveType topologies[]={MTLPrimitiveTypeTriangle,MTLPrimitiveTypeTriangleStrip,MTLPrimitiveTypeLine,MTLPrimitiveTypePoint}; require(u[2]<4&&u[5]<3,@"invalid topology or cull mode");
@@ -508,7 +501,13 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
  }
  }
  require(NO,@"unknown bridge operation");
- } @catch(NSException *e) {snprintf(mbErrorText,sizeof(mbErrorText),"%s",e.reason.UTF8String); a->error=1;}
+ } @catch(NSException *e) {
+  snprintf(mbErrorText,sizeof(mbErrorText),"%s",e.reason.UTF8String); a->error=1;
+  // Close any encoder the failed op left open. Releasing one without endEncoding
+  // aborts the process, which would bury the message above under an unrelated
+  // assertion by the time the caller's panic unwinds.
+  if(c) { if(c.render) { [c.render endEncoding]; c.render=nil; } endCompute(c); endBlit(c); }
+ }
  return 0;
  }
 }
