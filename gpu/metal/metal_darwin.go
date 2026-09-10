@@ -1,11 +1,11 @@
 //go:build darwin && cgo
 
-// Package metal implements gpu.Backend directly on Metal 3 (macOS 13+), using
+// Package metal implements gpu.Backend directly on Metal 4 (macOS 26+), using
 // GPU addresses and Tier 2 argument buffers. See README.md for the shader ABI.
 package metal
 
 /*
-#cgo CFLAGS: -mmacosx-version-min=13.0
+#cgo CFLAGS: -mmacosx-version-min=26.0
 #cgo LDFLAGS: -framework Metal -framework Foundation -framework QuartzCore -framework Cocoa
 #include "bridge.h"
 #include <stdlib.h>
