@@ -636,6 +636,10 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     rs.cullMode = cull;
     rs.frontFace = frontFaceCW ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
     rs.lineWidth = 1.0f;
+    // Depth bias is always enabled and its factors are dynamic (SetDepthBias);
+    // a pipeline that never calls it just runs with the all-zero default,
+    // equivalent to bias disabled.
+    rs.depthBiasEnable = VK_TRUE;
 
     VkPipelineMultisampleStateCreateInfo ms = {0};
     ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -673,10 +677,10 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     cb.attachmentCount = nColor;
     cb.pAttachments = atts;
 
-    VkDynamicState dyn[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkDynamicState dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS };
     VkPipelineDynamicStateCreateInfo dsi = {0};
     dsi.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dsi.dynamicStateCount = 2; dsi.pDynamicStates = dyn;
+    dsi.dynamicStateCount = 3; dsi.pDynamicStates = dyn;
 
     VkPipelineRenderingCreateInfo rci = {0};
     rci.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;

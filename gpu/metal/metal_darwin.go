@@ -394,6 +394,13 @@ func (c *command) SetScissor(x, y, w, h int32) {
 	a := args(uint64(x), uint64(y), uint64(w), uint64(h))
 	c.call(C.MBScissor, &a)
 }
+func (c *command) SetDepthBias(bias, slope, clamp float32) {
+	a := args()
+	a.f[0] = C.double(bias)
+	a.f[1] = C.double(slope)
+	a.f[2] = C.double(clamp)
+	c.call(C.MBDepthBias, &a)
+}
 func (c *command) Draw(data []byte, n, i, v, base uint32) {
 	a := args(uint64(n), uint64(i), uint64(v), uint64(base))
 	withData(&a, data)

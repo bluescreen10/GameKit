@@ -562,6 +562,13 @@ type CommandBuffer interface {
 	SetViewport(x, y, width, height, minDepth, maxDepth float32)
 	SetScissor(x, y, width, height int32)
 
+	// SetDepthBias offsets fragment depth to fight shadow acne / z-fighting
+	// (e.g. shadow-map rendering): depth += bias + slope*maxSlope, clamped to
+	// clamp (0 => unclamped). It is dynamic per Draw like viewport/scissor;
+	// pass all zero to disable. Only meaningful when the bound pipeline has
+	// DepthTest or DepthWrite enabled.
+	SetDepthBias(bias, slope, clamp float32)
+
 	// Every draw and dispatch carries its own `data`: the bytes the shader reads as
 	// push constants. Use utils.ToBytes to pass a struct.
 	//

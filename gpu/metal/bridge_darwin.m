@@ -649,6 +649,7 @@ uint64_t mbCall(void *backend,int op,MBArgs *a) {
  case MBSetPipeline: c.pipeline=resource(b,u[0],0); require(c.pipeline.kind==4||c.pipeline.kind==5,@"invalid pipeline"); return 0;
  case MBViewport: require(c.render!=nil,@"viewport outside render pass"); c.viewport=(MTLViewport){f[0],f[1],f[2],f[3],f[4],f[5]}; c.hasViewport=YES; [c.render setViewport:c.viewport]; return 0;
  case MBScissor: require(c.render!=nil,@"scissor outside render pass"); c.scissor=(MTLScissorRect){u[0],u[1],u[2],u[3]}; c.hasScissor=YES; [c.render setScissorRect:c.scissor]; return 0;
+ case MBDepthBias: require(c.render!=nil,@"depth bias outside render pass"); [c.render setDepthBias:f[0] slopeScale:f[1] clamp:f[2]]; return 0;
  case MBDraw: prepareWork(b,c); draw(b,c,a->p[0],(uint32_t)u[29]); [c.render drawPrimitives:c.pipeline.topology vertexStart:u[2] vertexCount:u[0] instanceCount:u[1] baseInstance:u[3]]; return 0;
  case MBIndexed: {prepareWork(b,c); draw(b,c,a->p[0],(uint32_t)u[29]);
   // Metal takes a BYTE offset here, unlike Vulkan which takes an element index and

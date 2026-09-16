@@ -28,7 +28,7 @@ enum {
     MBInit, MBDestroy, MBAlloc, MBFree, MBAddress, MBContents,
     MBTexture, MBView, MBSampler, MBPipeline, MBCompute, MBRelease,
     MBBegin, MBSubmit, MBWait, MBIdle, MBRenderBegin, MBRenderEnd,
-    MBSetPipeline, MBViewport, MBScissor, MBDraw, MBIndexed,
+    MBSetPipeline, MBViewport, MBScissor, MBDepthBias, MBDraw, MBIndexed,
     MBIndirect, MBDispatch, MBDispatchIndirect, MBBarrier, MBCopyBuffer,
     MBUpload, MBReadback, MBSurface, MBSwapchain, MBResize, MBAcquire,
     MBPresent, MBPool, MBReadTimes, MBResetTimes, MBTimestamp

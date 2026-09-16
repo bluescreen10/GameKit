@@ -217,6 +217,12 @@ func (c *cmdBuffer) EndRenderPass() { C.vkCmdEndRendering(c.cb) }
 func (c *cmdBuffer) SetPipeline(p gpu.Pipeline) {
 	e := c.b.pipelines[uint64(p.H)]
 	C.vkCmdBindPipeline(c.cb, e.bindPoint, e.pipe)
+	if e.bindPoint == C.VK_PIPELINE_BIND_POINT_GRAPHICS {
+		// Depth bias is always a dynamic pipeline state (see bridge.c); Vulkan
+		// requires it be set at least once before a draw uses it, so bind a
+		// no-bias default here and let SetDepthBias override it.
+		C.vkCmdSetDepthBias(c.cb, 0, 0, 0)
+	}
 }
 
 // push records the draw/dispatch data as push constants. Vulkan requires the size to
@@ -243,6 +249,10 @@ func (c *cmdBuffer) SetScissor(x, y, width, height int32) {
 	sc := C.VkRect2D{offset: C.VkOffset2D{x: C.int32_t(x), y: C.int32_t(y)},
 		extent: C.VkExtent2D{width: C.uint32_t(width), height: C.uint32_t(height)}}
 	C.vkCmdSetScissor(c.cb, 0, 1, &sc)
+}
+
+func (c *cmdBuffer) SetDepthBias(bias, slope, clamp float32) {
+	C.vkCmdSetDepthBias(c.cb, C.float(bias), C.float(clamp), C.float(slope))
 }
 
 func (c *cmdBuffer) Draw(data []byte, vertexCount, instanceCount, firstVertex, firstInstance uint32) {
