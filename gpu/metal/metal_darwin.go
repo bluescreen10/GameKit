@@ -32,6 +32,39 @@ var _ gpu.CommandBuffer = (*command)(nil)
 // ShaderFormat identifies the native shader format to renderer integrations.
 func (*Backend) ShaderFormat() string { return "metal" }
 
+// supportedFormats is the static set this backend accepts. Every entry here
+// must have a real case in bridge_darwin.m's format(); ETC2/EAC are excluded
+// because Metal never exposes them, on any platform.
+var supportedFormats = []gpu.Format{
+	gpu.FormatR8Unorm, gpu.FormatRG8Unorm, gpu.FormatRGBA8Unorm, gpu.FormatBGRA8Unorm,
+	gpu.FormatRGBA8Srgb, gpu.FormatBGRA8Srgb,
+	gpu.FormatR8Snorm, gpu.FormatRG8Snorm, gpu.FormatRGBA8Snorm,
+	gpu.FormatR8Uint, gpu.FormatRG8Uint, gpu.FormatRGBA8Uint,
+	gpu.FormatR8Sint, gpu.FormatRG8Sint, gpu.FormatRGBA8Sint,
+	gpu.FormatR16Unorm, gpu.FormatRG16Unorm, gpu.FormatRGBA16Unorm,
+	gpu.FormatR16Snorm, gpu.FormatRG16Snorm, gpu.FormatRGBA16Snorm,
+	gpu.FormatR16Uint, gpu.FormatRG16Uint, gpu.FormatRGBA16Uint,
+	gpu.FormatR16Sint, gpu.FormatRG16Sint, gpu.FormatRGBA16Sint,
+	gpu.FormatR16F, gpu.FormatRG16F, gpu.FormatRGBA16F,
+	gpu.FormatR32Uint, gpu.FormatRG32Uint, gpu.FormatRGBA32Uint,
+	gpu.FormatR32Sint, gpu.FormatRG32Sint, gpu.FormatRGBA32Sint,
+	gpu.FormatR32F, gpu.FormatRG32F, gpu.FormatRGBA32F,
+	gpu.FormatRGB10A2Unorm, gpu.FormatRGB10A2Uint, gpu.FormatRG11B10F, gpu.FormatRGB9E5F,
+	gpu.FormatDepth16Unorm, gpu.FormatDepth32F, gpu.FormatDepth24Stencil8, gpu.FormatDepth32FStencil8, gpu.FormatStencil8,
+	gpu.FormatBC1Unorm, gpu.FormatBC1Srgb, gpu.FormatBC3Unorm, gpu.FormatBC3Srgb,
+	gpu.FormatBC4Unorm, gpu.FormatBC4Snorm, gpu.FormatBC5Unorm, gpu.FormatBC5Snorm,
+	gpu.FormatBC6HFloat, gpu.FormatBC6HUFloat, gpu.FormatBC7Unorm, gpu.FormatBC7Srgb,
+	gpu.FormatASTC4x4Unorm, gpu.FormatASTC4x4Srgb,
+	gpu.FormatASTC5x5Unorm, gpu.FormatASTC5x5Srgb,
+	gpu.FormatASTC6x6Unorm, gpu.FormatASTC6x6Srgb,
+	gpu.FormatASTC8x8Unorm, gpu.FormatASTC8x8Srgb,
+	gpu.FormatASTC10x10Unorm, gpu.FormatASTC10x10Srgb,
+	gpu.FormatASTC12x12Unorm, gpu.FormatASTC12x12Srgb,
+}
+
+// SupportedFormats reports the Format values this backend can create textures with.
+func (b *Backend) SupportedFormats() []gpu.Format { return supportedFormats }
+
 func New() *Backend { return &Backend{} }
 func init()         { gpu.RegisterBackend(New(), "metal", 1) }
 func (b *Backend) call(op int, a *C.MBArgs) uint64 {

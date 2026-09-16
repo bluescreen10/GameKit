@@ -92,7 +92,7 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	if mips == 0 {
 		mips = 1
 	}
-	isDepth := d.Format == gpu.FormatDepth32F || d.Format == gpu.FormatDepth24Stencil8
+	isDepth := d.Format.IsDepth()
 	aspect := C.VkImageAspectFlags(C.VK_IMAGE_ASPECT_COLOR_BIT)
 	if isDepth {
 		aspect = C.VK_IMAGE_ASPECT_DEPTH_BIT

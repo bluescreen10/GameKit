@@ -96,25 +96,138 @@ const (
 	MemoryDevice
 )
 
-// Format is a texel/attachment format (subset; extend as needed).
+// Format is a texel/attachment format. This is the full catalog the RHI knows
+// about across every platform it targets; no single Backend supports all of
+// them; call Backend.SupportedFormats to find out what a given backend accepts.
 type Format uint16
 
 const (
 	FormatUndefined Format = iota
+
+	// 8-bit per channel, unsigned normalized.
 	FormatR8Unorm
 	FormatRG8Unorm
 	FormatRGBA8Unorm
-	FormatRGBA8Srgb
 	FormatBGRA8Unorm
+	FormatRGBA8Srgb
 	FormatBGRA8Srgb
+
+	// 8-bit per channel, signed normalized.
+	FormatR8Snorm
+	FormatRG8Snorm
+	FormatRGBA8Snorm
+
+	// 8-bit per channel, integer.
+	FormatR8Uint
+	FormatRG8Uint
+	FormatRGBA8Uint
+	FormatR8Sint
+	FormatRG8Sint
+	FormatRGBA8Sint
+
+	// 16-bit per channel, unsigned/signed normalized.
+	FormatR16Unorm
+	FormatRG16Unorm
+	FormatRGBA16Unorm
+	FormatR16Snorm
+	FormatRG16Snorm
+	FormatRGBA16Snorm
+
+	// 16-bit per channel, integer.
+	FormatR16Uint
+	FormatRG16Uint
+	FormatRGBA16Uint
+	FormatR16Sint
+	FormatRG16Sint
+	FormatRGBA16Sint
+
+	// 16-bit per channel, float.
+	FormatR16F
 	FormatRG16F
 	FormatRGBA16F
+
+	// 32-bit per channel, integer.
+	FormatR32Uint
+	FormatRG32Uint
+	FormatRGBA32Uint
+	FormatR32Sint
+	FormatRG32Sint
+	FormatRGBA32Sint
+
+	// 32-bit per channel, float.
 	FormatR32F
+	FormatRG32F
 	FormatRGBA32F
+
+	// Packed.
 	FormatRGB10A2Unorm
+	FormatRGB10A2Uint
+	FormatRG11B10F
+	FormatRGB9E5F
+
+	// Depth / stencil.
+	FormatDepth16Unorm
 	FormatDepth32F
 	FormatDepth24Stencil8
+	FormatDepth32FStencil8
+	FormatStencil8
+
+	// Desktop block compression (BC / DirectX Texture Compression).
+	FormatBC1Unorm
+	FormatBC1Srgb
+	FormatBC3Unorm
+	FormatBC3Srgb
+	FormatBC4Unorm
+	FormatBC4Snorm
+	FormatBC5Unorm
+	FormatBC5Snorm
+	FormatBC6HFloat
+	FormatBC6HUFloat
+	FormatBC7Unorm
+	FormatBC7Srgb
+
+	// Mobile block compression: ETC2/EAC.
+	FormatETC2RGB8Unorm
+	FormatETC2RGB8Srgb
+	FormatETC2RGBA8Unorm
+	FormatETC2RGBA8Srgb
+	FormatEACR11Unorm
+	FormatEACRG11Unorm
+
+	// Mobile block compression: ASTC LDR.
+	FormatASTC4x4Unorm
+	FormatASTC4x4Srgb
+	FormatASTC5x5Unorm
+	FormatASTC5x5Srgb
+	FormatASTC6x6Unorm
+	FormatASTC6x6Srgb
+	FormatASTC8x8Unorm
+	FormatASTC8x8Srgb
+	FormatASTC10x10Unorm
+	FormatASTC10x10Srgb
+	FormatASTC12x12Unorm
+	FormatASTC12x12Srgb
 )
+
+// IsDepth reports whether f carries a depth aspect.
+func (f Format) IsDepth() bool {
+	switch f {
+	case FormatDepth16Unorm, FormatDepth32F, FormatDepth24Stencil8, FormatDepth32FStencil8:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsStencil reports whether f carries a stencil aspect.
+func (f Format) IsStencil() bool {
+	switch f {
+	case FormatDepth24Stencil8, FormatDepth32FStencil8, FormatStencil8:
+		return true
+	default:
+		return false
+	}
+}
 
 // TextureUsage is a bitmask of intended uses.
 type TextureUsage uint16
@@ -369,6 +482,11 @@ type DepthAttachment struct {
 // manage — resources are reached through addresses and the bindless heap.
 type Backend interface {
 	Init() error // This obtains the device, setup queues, etc.
+	// SupportedFormats lists the Format values this backend can create textures
+	// with (a subset of the full Format catalog above). Query it before choosing
+	// a format for an asset pipeline or render target that must run on every
+	// backend.
+	SupportedFormats() []Format
 	// Memory.
 	Alloc(size uint64, mem MemoryType, label string) Buffer
 	Free(Buffer)

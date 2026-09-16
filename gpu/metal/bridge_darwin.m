@@ -177,9 +177,89 @@ static uint64_t addWithResidency(MBDevice *b,id obj,NSUInteger kind,BOOL residen
  return h;
 }
 static uint64_t add(MBDevice *b,id obj,NSUInteger kind) { return addWithResidency(b,obj,kind,YES); }
+// format maps a gpu.Format (see gpu/rhi.go) to its MTLPixelFormat. This is a
+// switch, not the old array-indexed-by-enum-value table, because the RHI's
+// Format catalog now spans formats this backend can't create (ETC2/EAC are not
+// exposed by Metal on any platform) — those fall through to Invalid rather than
+// occupying a table slot. Keep in sync with gpu.Format and with
+// gpu/metal/metal_darwin.go's supportedFormats.
 static MTLPixelFormat format(uint64_t f) {
- static const MTLPixelFormat fs[]={MTLPixelFormatInvalid,MTLPixelFormatR8Unorm,MTLPixelFormatRG8Unorm,MTLPixelFormatRGBA8Unorm,MTLPixelFormatRGBA8Unorm_sRGB,MTLPixelFormatBGRA8Unorm,MTLPixelFormatBGRA8Unorm_sRGB,MTLPixelFormatRG16Float,MTLPixelFormatRGBA16Float,MTLPixelFormatR32Float,MTLPixelFormatRGBA32Float,MTLPixelFormatRGB10A2Unorm,MTLPixelFormatDepth32Float,MTLPixelFormatDepth24Unorm_Stencil8};
- require(f<sizeof(fs)/sizeof(fs[0]),@"unknown texture format"); return fs[f];
+ switch(f) {
+  case 1: return MTLPixelFormatR8Unorm;
+  case 2: return MTLPixelFormatRG8Unorm;
+  case 3: return MTLPixelFormatRGBA8Unorm;
+  case 4: return MTLPixelFormatBGRA8Unorm;
+  case 5: return MTLPixelFormatRGBA8Unorm_sRGB;
+  case 6: return MTLPixelFormatBGRA8Unorm_sRGB;
+  case 7: return MTLPixelFormatR8Snorm;
+  case 8: return MTLPixelFormatRG8Snorm;
+  case 9: return MTLPixelFormatRGBA8Snorm;
+  case 10: return MTLPixelFormatR8Uint;
+  case 11: return MTLPixelFormatRG8Uint;
+  case 12: return MTLPixelFormatRGBA8Uint;
+  case 13: return MTLPixelFormatR8Sint;
+  case 14: return MTLPixelFormatRG8Sint;
+  case 15: return MTLPixelFormatRGBA8Sint;
+  case 16: return MTLPixelFormatR16Unorm;
+  case 17: return MTLPixelFormatRG16Unorm;
+  case 18: return MTLPixelFormatRGBA16Unorm;
+  case 19: return MTLPixelFormatR16Snorm;
+  case 20: return MTLPixelFormatRG16Snorm;
+  case 21: return MTLPixelFormatRGBA16Snorm;
+  case 22: return MTLPixelFormatR16Uint;
+  case 23: return MTLPixelFormatRG16Uint;
+  case 24: return MTLPixelFormatRGBA16Uint;
+  case 25: return MTLPixelFormatR16Sint;
+  case 26: return MTLPixelFormatRG16Sint;
+  case 27: return MTLPixelFormatRGBA16Sint;
+  case 28: return MTLPixelFormatR16Float;
+  case 29: return MTLPixelFormatRG16Float;
+  case 30: return MTLPixelFormatRGBA16Float;
+  case 31: return MTLPixelFormatR32Uint;
+  case 32: return MTLPixelFormatRG32Uint;
+  case 33: return MTLPixelFormatRGBA32Uint;
+  case 34: return MTLPixelFormatR32Sint;
+  case 35: return MTLPixelFormatRG32Sint;
+  case 36: return MTLPixelFormatRGBA32Sint;
+  case 37: return MTLPixelFormatR32Float;
+  case 38: return MTLPixelFormatRG32Float;
+  case 39: return MTLPixelFormatRGBA32Float;
+  case 40: return MTLPixelFormatRGB10A2Unorm;
+  case 41: return MTLPixelFormatRGB10A2Uint;
+  case 42: return MTLPixelFormatRG11B10Float;
+  case 43: return MTLPixelFormatRGB9E5Float;
+  case 44: return MTLPixelFormatDepth16Unorm;
+  case 45: return MTLPixelFormatDepth32Float;
+  case 46: return MTLPixelFormatDepth24Unorm_Stencil8;
+  case 47: return MTLPixelFormatDepth32Float_Stencil8;
+  case 48: return MTLPixelFormatStencil8;
+  case 49: return MTLPixelFormatBC1_RGBA;
+  case 50: return MTLPixelFormatBC1_RGBA_sRGB;
+  case 51: return MTLPixelFormatBC3_RGBA;
+  case 52: return MTLPixelFormatBC3_RGBA_sRGB;
+  case 53: return MTLPixelFormatBC4_RUnorm;
+  case 54: return MTLPixelFormatBC4_RSnorm;
+  case 55: return MTLPixelFormatBC5_RGUnorm;
+  case 56: return MTLPixelFormatBC5_RGSnorm;
+  case 57: return MTLPixelFormatBC6H_RGBFloat;
+  case 58: return MTLPixelFormatBC6H_RGBUfloat;
+  case 59: return MTLPixelFormatBC7_RGBAUnorm;
+  case 60: return MTLPixelFormatBC7_RGBAUnorm_sRGB;
+  // 61-66: ETC2/EAC — not exposed by Metal on any platform.
+  case 67: return MTLPixelFormatASTC_4x4_LDR;
+  case 68: return MTLPixelFormatASTC_4x4_sRGB;
+  case 69: return MTLPixelFormatASTC_5x5_LDR;
+  case 70: return MTLPixelFormatASTC_5x5_sRGB;
+  case 71: return MTLPixelFormatASTC_6x6_LDR;
+  case 72: return MTLPixelFormatASTC_6x6_sRGB;
+  case 73: return MTLPixelFormatASTC_8x8_LDR;
+  case 74: return MTLPixelFormatASTC_8x8_sRGB;
+  case 75: return MTLPixelFormatASTC_10x10_LDR;
+  case 76: return MTLPixelFormatASTC_10x10_sRGB;
+  case 77: return MTLPixelFormatASTC_12x12_LDR;
+  case 78: return MTLPixelFormatASTC_12x12_sRGB;
+  default: return MTLPixelFormatInvalid;
+ }
 }
 static MTLTextureType textureType(uint64_t k) {
  static const MTLTextureType ts[]={MTLTextureType2D,MTLTextureType2DArray,MTLTextureTypeCube,MTLTextureTypeCubeArray,MTLTextureType3D};
