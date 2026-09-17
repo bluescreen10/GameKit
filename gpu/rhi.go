@@ -44,7 +44,7 @@ type Buffer struct {
 }
 
 // Valid reports whether the buffer refers to a live allocation.
-func (b Buffer) Valid() bool { return b.H != 0 }
+func (b Buffer) IsValid() bool { return b.H != 0 }
 
 // Texture is a slot in the global bindless heap. Index is what a shader uses to
 // sample (nonuniformEXT(index) into the sampled-image array). H is the backend
@@ -54,7 +54,7 @@ type Texture struct {
 	H     Handle
 }
 
-func (t Texture) Valid() bool { return t.H != 0 }
+func (t Texture) IsValid() bool { return t.H != 0 }
 
 // Sampler is a slot in the bindless sampler heap; Index is used from shaders.
 type Sampler struct {
@@ -66,7 +66,7 @@ type Sampler struct {
 // only formats + topology + minimal state; everything else is dynamic or root data.
 type Pipeline struct{ H Handle }
 
-func (p Pipeline) Valid() bool { return p.H != 0 }
+func (p Pipeline) IsValid() bool { return p.H != 0 }
 
 // Swapchain is a window's presentation chain. Backbuffers are surfaced as
 // Textures (render targets) via AcquireNext.
@@ -79,7 +79,7 @@ type Fence struct{ H Handle }
 type QueryPool struct{ H Handle }
 
 // Valid reports whether the pool was created.
-func (q QueryPool) Valid() bool { return q.H != 0 }
+func (q QueryPool) IsValid() bool { return q.H != 0 }
 
 // ----------------------------------------------------------------------------
 // Enums

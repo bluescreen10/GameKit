@@ -108,7 +108,7 @@ func TestDispatchIndirectAndEntries(t *testing.T) {
 func TestTimestamps(t *testing.T) {
 	b := device(t)
 	p := b.CreateTimestampPool(3)
-	if !p.Valid() {
+	if !p.IsValid() {
 		t.Skip("timestamp counters unavailable")
 	}
 	defer b.DestroyTimestampPool(p)
