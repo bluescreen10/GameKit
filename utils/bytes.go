@@ -25,3 +25,16 @@ import "unsafe"
 func ToBytes[T any](v *T) []byte {
 	return unsafe.Slice((*byte)(unsafe.Pointer(v)), unsafe.Sizeof(*v))
 }
+
+// ToBytesSlice views a slice as the raw bytes of its contiguous backing array,
+// without copying — ToBytes' counterpart for a buffer upload that carries many
+// elements (transforms, indices, indirect args) rather than one push-constant root.
+//
+// The returned slice ALIASES s; keep s alive and unmodified for as long as the bytes
+// are in use. A nil or empty s returns nil.
+func ToBytesSlice[T any](s []T) []byte {
+	if len(s) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&s[0])), len(s)*int(unsafe.Sizeof(s[0])))
+}

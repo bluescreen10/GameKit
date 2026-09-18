@@ -21,7 +21,10 @@
 //     lists.
 package gpu
 
-import "unsafe"
+import (
+	"fmt"
+	"unsafe"
+)
 
 // ----------------------------------------------------------------------------
 // Handles
@@ -45,6 +48,25 @@ type Buffer struct {
 
 // Valid reports whether the buffer refers to a live allocation.
 func (b Buffer) IsValid() bool { return b.H != 0 }
+
+// Write copies data into the buffer's persistently-mapped memory at byteOffset.
+// It panics rather than segfaulting if the buffer has no mapped pointer (a
+// MemoryDevice allocation, or an invalid Buffer) or if byteOffset+len(data) would
+// write past Size.
+func (b Buffer) Write(data []byte, byteOffset uint64) {
+	if len(data) == 0 {
+		return
+	}
+	if b.Ptr == nil {
+		panic("gpu: Buffer.Write: buffer has no mapped pointer")
+	}
+	if byteOffset > b.Size || uint64(len(data)) > b.Size-byteOffset {
+		panic(fmt.Sprintf("gpu: Buffer.Write: write of %d bytes at offset %d overruns a %d-byte buffer",
+			len(data), byteOffset, b.Size))
+	}
+	dst := unsafe.Slice((*byte)(b.Ptr), b.Size)
+	copy(dst[byteOffset:], data)
+}
 
 // Texture is a slot in the global bindless heap. Index is what a shader uses to
 // sample (nonuniformEXT(index) into the sampled-image array). H is the backend
