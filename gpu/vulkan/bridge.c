@@ -598,20 +598,29 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     return r;
 }
 
-// vkbCreateGraphicsPipeline builds a minimal graphics pipeline: vs+fs, empty
+// vkbCreateGraphicsPipeline builds a minimal graphics pipeline: vs (+fs), empty
 // vertex input (geometry is pulled via BDA), dynamic viewport/scissor, dynamic
 // rendering (formats via VkPipelineRenderingCreateInfo, renderPass = NULL),
 // opaque color targets. Depth is enabled iff depthFormat != UNDEFINED.
+//
+// fs may be NULL, for a pipeline that writes depth and nothing else. That is a real
+// configuration rather than a shortcut: a fragment stage bound to a pass with no colour
+// attachment still runs, and one bound to a pass that HAS an attachment while writing
+// nothing to it produces undefined colour rather than no colour.
  VkResult vkbCreateCreateGraphicsPipeline(VkDevice dev, VkPipelineLayout layout,
         const void* vs, size_t vsBytes, const void* fs, size_t fsBytes, const char* entry,
         VkPrimitiveTopology topo, const VkFormat* colorFmts, uint32_t nColor,
         VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, int blendMode,
         int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples, VkPipeline* out) {
-    VkShaderModule vmod, fmod;
+    VkShaderModule vmod, fmod = VK_NULL_HANDLE;
     VkResult r = vkbShaderModule(dev, (const uint32_t*)vs, vsBytes, &vmod);
     if (r != VK_SUCCESS) return r;
-    r = vkbShaderModule(dev, (const uint32_t*)fs, fsBytes, &fmod);
-    if (r != VK_SUCCESS) { vkDestroyShaderModule(dev, vmod, NULL); return r; }
+    uint32_t nStages = 1;
+    if (fs && fsBytes) {
+        r = vkbShaderModule(dev, (const uint32_t*)fs, fsBytes, &fmod);
+        if (r != VK_SUCCESS) { vkDestroyShaderModule(dev, vmod, NULL); return r; }
+        nStages = 2;
+    }
 
     VkPipelineShaderStageCreateInfo stages[2] = {0};
     stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -691,7 +700,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     VkGraphicsPipelineCreateInfo ci = {0};
     ci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     ci.pNext = &rci; // dynamic rendering
-    ci.stageCount = 2; ci.pStages = stages;
+    ci.stageCount = nStages; ci.pStages = stages;
     ci.pVertexInputState = &vin;
     ci.pInputAssemblyState = &ia;
     ci.pViewportState = &vp;
@@ -705,7 +714,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 
     r = vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &ci, NULL, out);
     vkDestroyShaderModule(dev, vmod, NULL);
-    vkDestroyShaderModule(dev, fmod, NULL);
+    if (fmod != VK_NULL_HANDLE) vkDestroyShaderModule(dev, fmod, NULL);
     return r;
 }
 
@@ -758,27 +767,32 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 // is a real Vulkan handle, never Go memory.
  VkSurfaceKHR vkbSurfaceFromHandle(uint64_t h) { return (VkSurfaceKHR)h; }
 
-// vkbCreateSwapchain creates (or recreates from old) a FIFO swapchain, picking a
-// BGRA8/RGBA8 unorm format. Returns the swapchain, chosen format and extent.
- VkResult vkbCreateSwapchain(VkPhysicalDevice phys, VkDevice dev, VkSurfaceKHR surface,
-                                   uint32_t w, uint32_t h, VkSwapchainKHR old,
-                                   VkSwapchainKHR* outSwap, VkFormat* outFmt, uint32_t* outW, uint32_t* outH) {
-    VkSurfaceCapabilitiesKHR caps;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps);
-
+// vkbSurfaceFormats writes up to max of the formats the surface presents in the sRGB
+// colour space into out, and returns how many it wrote. Other colour spaces (HDR10,
+// extended linear) are left out until a swapchain can ask for one.
+ uint32_t vkbSurfaceFormats(VkPhysicalDevice phys, VkSurfaceKHR surface, VkFormat* out, uint32_t max) {
     uint32_t nf = 0;
     vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface, &nf, NULL);
     VkSurfaceFormatKHR* fmts = (VkSurfaceFormatKHR*)malloc(nf * sizeof(VkSurfaceFormatKHR));
     vkGetPhysicalDeviceSurfaceFormatsKHR(phys, surface, &nf, fmts);
-    VkSurfaceFormatKHR chosen = fmts[0];
-    for (uint32_t i = 0; i < nf; i++) {
-        if ((fmts[i].format == VK_FORMAT_B8G8R8A8_UNORM || fmts[i].format == VK_FORMAT_R8G8B8A8_UNORM) &&
-            fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                chosen = fmts[i];
-                break;
-            }
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < nf && n < max; i++) {
+        if (fmts[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
+            out[n++] = fmts[i].format;
+        }
     }
     free(fmts);
+    return n;
+}
+
+// vkbCreateSwapchain creates (or recreates from old) a FIFO swapchain of the given
+// format, in the sRGB colour space — the caller picks it from vkbSurfaceFormats.
+// Returns the swapchain and extent.
+ VkResult vkbCreateSwapchain(VkPhysicalDevice phys, VkDevice dev, VkSurfaceKHR surface,
+                                   uint32_t w, uint32_t h, VkFormat format, VkSwapchainKHR old,
+                                   VkSwapchainKHR* outSwap, uint32_t* outW, uint32_t* outH) {
+    VkSurfaceCapabilitiesKHR caps;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps);
 
     VkExtent2D ext = caps.currentExtent;
     if (ext.width == 0xFFFFFFFF) {
@@ -795,8 +809,8 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     ci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     ci.surface = surface;
     ci.minImageCount = minImg;
-    ci.imageFormat = chosen.format;
-    ci.imageColorSpace = chosen.colorSpace;
+    ci.imageFormat = format;
+    ci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
     ci.imageExtent = ext;
     ci.imageArrayLayers = 1;
     // TRANSFER_SRC lets the frame be copied back out (screenshots). It is optional:
@@ -815,7 +829,6 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     ci.oldSwapchain = old;
 
     VkResult r = vkCreateSwapchainKHR(dev, &ci, NULL, outSwap);
-    *outFmt = chosen.format;
     *outW = ext.width; *outH = ext.height;
     return r;
 }

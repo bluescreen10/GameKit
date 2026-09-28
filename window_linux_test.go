@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/bluescreen10/gamekit/gpu"
 	"github.com/bluescreen10/gamekit/gpu/vulkan"
 	"github.com/bluescreen10/gamekit/keyboard"
 )
@@ -56,7 +57,10 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 	if surface == 0 {
 		t.Fatal("Vulkan surface is nil")
 	}
-	swapchain := backend.CreateSwapchain(surface, 320, 200)
+	swapchain, err := backend.CreateSwapchain(surface, gpu.SwapchainDescriptor{Width: 320, Height: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if swapchain.H == 0 {
 		t.Fatal("Vulkan swapchain is invalid")
 	}

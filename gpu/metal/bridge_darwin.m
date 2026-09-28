@@ -461,9 +461,15 @@ static uint64_t submit(MBDevice *b,uint64_t h,id<CAMetalDrawable> drawable) {
   (void)objects;
   dispatch_semaphore_signal(b.feedbackSem);
  }];
- if(drawable) [b.queue signalDrawable:drawable];
  id<MTL4CommandBuffer> buffers[]={c.buffer};
  [b.queue commit:buffers count:1 options:opts]; [opts release];
+ // signalDrawable MUST follow the commit it is meant to cover. The queue is an ordered
+ // timeline, so signalling first marks the drawable ready ahead of the work that draws
+ // into it, and the present below then shows whatever the frame happened to contain at
+ // that moment. With GPU time inside the vsync interval that is usually a finished
+ // frame; once it is not, the result is a torn or half-drawn one — which reads as
+ // tearing under load rather than as the frame rate dropping.
+ if(drawable) [b.queue signalDrawable:drawable];
  [b.queue signalEvent:b.event value:value];
  if(drawable) [drawable present];
  [objects release]; [starts release]; [ends release];
@@ -827,9 +833,9 @@ MBResult mbCreateMetalSurface(void *window) { MB_BEGIN(nil,0) {
  } MB_END
 }
 
-MBResult mbCreateSwapchain(void *backend,uintptr_t surface,uint32_t width,uint32_t height) { MB_BEGIN(backend,0) {
+MBResult mbCreateSwapchain(void *backend,uintptr_t surface,uint32_t width,uint32_t height,uint32_t pixelFormat) { MB_BEGIN(backend,0) {
   CAMetalLayer *layer=(CAMetalLayer*)surface; require([layer isKindOfClass:CAMetalLayer.class],@"surface must be a CAMetalLayer");
-  layer.device=b.device; layer.pixelFormat=MTLPixelFormatBGRA8Unorm; layer.framebufferOnly=NO; layer.drawableSize=CGSizeMake(width,height); return mbSuccess(add(b,layer,6),0);
+  layer.device=b.device; layer.pixelFormat=format(pixelFormat); layer.framebufferOnly=NO; layer.drawableSize=CGSizeMake(width,height); return mbSuccess(add(b,layer,6),0);
  } MB_END
 }
 MBResult mbResizeSwapchain(void *backend,uint64_t swapchain,uint32_t width,uint32_t height) { MB_BEGIN(backend,0) {

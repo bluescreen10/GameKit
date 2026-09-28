@@ -143,9 +143,10 @@ void vkbCmdWriteTimestamp(VkCommandBuffer cb, VkPipelineStageFlags2 stage, VkQue
 
 VkSurfaceKHR vkbSurfaceFromHandle(uint64_t h);
 
+uint32_t vkbSurfaceFormats(VkPhysicalDevice phys, VkSurfaceKHR surface, VkFormat* out, uint32_t max);
 VkResult vkbCreateSwapchain(VkPhysicalDevice phys, VkDevice dev, VkSurfaceKHR surface,
-                                   uint32_t w, uint32_t h, VkSwapchainKHR old,
-                                   VkSwapchainKHR* outSwap, VkFormat* outFmt, uint32_t* outW, uint32_t* outH);
+                                   uint32_t w, uint32_t h, VkFormat format, VkSwapchainKHR old,
+                                   VkSwapchainKHR* outSwap, uint32_t* outW, uint32_t* outH);
 
 uint32_t vkbSwapchainImageCount(VkDevice dev, VkSwapchainKHR swap);
 

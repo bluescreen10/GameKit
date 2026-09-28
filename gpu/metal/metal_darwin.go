@@ -17,6 +17,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"runtime"
+	"slices"
+	"sync"
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
@@ -24,7 +26,13 @@ import (
 
 // Backend owns one device and serial queue. Like command recording, resource
 // creation/destruction must be externally serialized. Wait before freeing resources.
-type Backend struct{ native unsafe.Pointer }
+type Backend struct {
+	native unsafe.Pointer
+
+	// swapchainFormats is each swapchain's backbuffer format, as created.
+	swapchainMu      sync.Mutex
+	swapchainFormats map[gpu.Handle]gpu.Format
+}
 
 var _ gpu.Backend = (*Backend)(nil)
 var _ gpu.CommandBuffer = (*command)(nil)
@@ -331,8 +339,31 @@ func (b *Backend) CreateMetalSurface(window unsafe.Pointer) uintptr {
 }
 
 // CreateSwapchain takes a CAMetalLayer pointer, e.g. from CreateMetalSurface.
-func (b *Backend) CreateSwapchain(surface uintptr, w, h uint32) gpu.Swapchain {
-	return gpu.Swapchain{H: gpu.Handle(result(C.mbCreateSwapchain(b.native, C.uintptr_t(surface), C.uint32_t(w), C.uint32_t(h))))}
+func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
+	format := desc.Format
+	if format == gpu.FormatUndefined {
+		format = gpu.FormatBGRA8Unorm
+	}
+	if !slices.Contains(layerFormats, format) {
+		return gpu.Swapchain{}, fmt.Errorf("metal: swapchain format %v is not one a CAMetalLayer presents", format)
+	}
+	sc := gpu.Swapchain{H: gpu.Handle(result(C.mbCreateSwapchain(b.native, C.uintptr_t(surface), C.uint32_t(desc.Width), C.uint32_t(desc.Height), C.uint32_t(format))))}
+
+	b.swapchainMu.Lock()
+	defer b.swapchainMu.Unlock()
+	if b.swapchainFormats == nil {
+		b.swapchainFormats = make(map[gpu.Handle]gpu.Format)
+	}
+	b.swapchainFormats[sc.H] = format
+	return sc, nil
+}
+
+// layerFormats is what a CAMetalLayer can present, in the RHI's catalog.
+var layerFormats = []gpu.Format{gpu.FormatBGRA8Unorm, gpu.FormatBGRA8Srgb, gpu.FormatRGBA16F, gpu.FormatRGB10A2Unorm}
+
+// SwapchainFormats is the same for every surface: whatever a CAMetalLayer presents.
+func (b *Backend) SwapchainFormats(surface uintptr) []gpu.Format {
+	return slices.Clone(layerFormats)
 }
 
 func (b *Backend) ResizeSwapchain(s gpu.Swapchain, w, h uint32) {
@@ -346,8 +377,10 @@ func (b *Backend) SwapchainSize(s gpu.Swapchain) (uint32, uint32) {
 	return uint32(r.value), uint32(r.auxiliary)
 }
 
-func (b *Backend) SwapchainFormat(gpu.Swapchain) gpu.Format {
-	return gpu.FormatBGRA8Unorm
+func (b *Backend) SwapchainFormat(s gpu.Swapchain) gpu.Format {
+	b.swapchainMu.Lock()
+	defer b.swapchainMu.Unlock()
+	return b.swapchainFormats[s.H]
 }
 
 func (b *Backend) AcquireNext(s gpu.Swapchain) (gpu.Texture, gpu.Fence) {

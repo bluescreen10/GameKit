@@ -7,6 +7,7 @@ import "C"
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/bluescreen10/gamekit/gpu"
 )
@@ -24,35 +25,64 @@ type swapchainState struct {
 	curImage uint32 // last acquired image index
 }
 
-func gpuFormatOf(f C.VkFormat) gpu.Format {
-	if f == C.VK_FORMAT_R8G8B8A8_UNORM {
-		return gpu.FormatRGBA8Unorm
+// SwapchainFormats lists the formats the surface presents in the sRGB colour space,
+// restricted to those the RHI can name.
+func (b *Backend) SwapchainFormats(surface uintptr) []gpu.Format {
+	var native [64]C.VkFormat
+	n := C.vkbSurfaceFormats(b.physicalDevice, C.vkbSurfaceFromHandle(C.uint64_t(surface)), &native[0], C.uint32_t(len(native)))
+	var formats []gpu.Format
+	for _, f := range native[:n] {
+		for _, candidate := range supportedFormats {
+			if vkFormat(candidate) == f && !slices.Contains(formats, candidate) {
+				formats = append(formats, candidate)
+			}
+		}
 	}
-	return gpu.FormatBGRA8Unorm
+	return formats
 }
 
 // CreateSwapchain wraps a platform VkSurfaceKHR in a swapchain, surfacing
 // backbuffers as render-target Textures.
-func (b *Backend) CreateSwapchain(surface uintptr, width, height uint32) gpu.Swapchain {
-	s := &swapchainState{surface: C.vkbSurfaceFromHandle(C.uint64_t(surface))}
-	b.buildSwapchain(s, width, height, nil)
+func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
+	available := b.SwapchainFormats(surface)
+	format := desc.Format
+	if format == gpu.FormatUndefined {
+		format = defaultSwapchainFormat(available)
+	}
+	if !slices.Contains(available, format) {
+		return gpu.Swapchain{}, fmt.Errorf("vulkan: the surface does not present swapchain format %v (it offers %v)", format, available)
+	}
+
+	s := &swapchainState{surface: C.vkbSurfaceFromHandle(C.uint64_t(surface)), gpuFmt: format, format: vkFormat(format)}
+	b.buildSwapchain(s, desc.Width, desc.Height, nil)
 
 	h := b.nextID.Add(1)
 	b.swapchains[h] = s
-	return gpu.Swapchain{H: gpu.Handle(h)}
+	return gpu.Swapchain{H: gpu.Handle(h)}, nil
+}
+
+// defaultSwapchainFormat is the format a swapchain gets when its descriptor names none:
+// an 8-bit unorm one, in whichever channel order the surface offers.
+func defaultSwapchainFormat(available []gpu.Format) gpu.Format {
+	for _, f := range []gpu.Format{gpu.FormatBGRA8Unorm, gpu.FormatRGBA8Unorm} {
+		if slices.Contains(available, f) {
+			return f
+		}
+	}
+	if len(available) > 0 {
+		return available[0]
+	}
+	return gpu.FormatUndefined
 }
 
 func (b *Backend) buildSwapchain(s *swapchainState, width, height uint32, old C.VkSwapchainKHR) {
 	var swap C.VkSwapchainKHR
-	var cfmt C.VkFormat
 	var w, h C.uint32_t
-	if r := C.vkbCreateSwapchain(b.physicalDevice, b.device, s.surface, C.uint32_t(width), C.uint32_t(height), old,
-		&swap, &cfmt, &w, &h); r != C.VK_SUCCESS {
+	if r := C.vkbCreateSwapchain(b.physicalDevice, b.device, s.surface, C.uint32_t(width), C.uint32_t(height), s.format, old,
+		&swap, &w, &h); r != C.VK_SUCCESS {
 		panic(fmt.Sprintf("vulkan: swapchain creation failed (%d)", int(r)))
 	}
 	s.swap = swap
-	s.format = cfmt
-	s.gpuFmt = gpuFormatOf(cfmt)
 	s.w, s.h = uint32(w), uint32(h)
 
 	n := uint32(C.vkbSwapchainImageCount(b.device, swap))
@@ -64,10 +94,10 @@ func (b *Backend) buildSwapchain(s *swapchainState, width, height uint32, old C.
 	s.rendered = make([]C.VkSemaphore, n)
 	for i := uint32(0); i < n; i++ {
 		var view C.VkImageView
-		C.vkbSwapImageView(b.device, imgs[i], cfmt, &view)
+		C.vkbSwapImageView(b.device, imgs[i], s.format, &view)
 		hh := b.nextID.Add(1)
 		b.textures[hh] = &textureEntry{
-			img: imgs[i], view: view, format: cfmt,
+			img: imgs[i], view: view, format: s.format,
 			width: s.w, height: s.h, layout: C.VK_IMAGE_LAYOUT_UNDEFINED, owned: false,
 		}
 		s.images[i] = gpu.Texture{H: gpu.Handle(hh)}

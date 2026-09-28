@@ -99,10 +99,17 @@ func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline 
 		frontFaceCW = 1
 	}
 
+	// A depth-only pipeline has no fragment stage at all; indexing an empty slice to get
+	// its address would panic before the backend ever saw it.
+	var fragPtr unsafe.Pointer
+	if len(d.FragmentShader) > 0 {
+		fragPtr = unsafe.Pointer(&d.FragmentShader[0])
+	}
+
 	var p C.VkPipeline
 	r := C.vkbCreateCreateGraphicsPipeline(b.device, b.pipelineLayout,
 		unsafe.Pointer(&d.VertexShader[0]), C.size_t(len(d.VertexShader)),
-		unsafe.Pointer(&d.FragmentShader[0]), C.size_t(len(d.FragmentShader)), cEntry,
+		fragPtr, C.size_t(len(d.FragmentShader)), cEntry,
 		topology(d.Topology), colorPtr, C.uint32_t(len(d.ColorFormats)),
 		vkFormat(d.DepthFormat), cullMode(d.CullMode), frontFaceCW, blendMode,
 		depthTest, depthWrite, compareOp(d.DepthCompare), C.uint32_t(samples), &p)

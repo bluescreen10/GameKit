@@ -87,7 +87,7 @@ MBResult mbWaitIdle(void *backend);
 
 MBResult mbCreateMetalSurface(void *window);
 MBResult mbCreateSwapchain(void *backend, uintptr_t surface, uint32_t width,
-    uint32_t height);
+    uint32_t height, uint32_t format);
 MBResult mbResizeSwapchain(void *backend, uint64_t swapchain, uint32_t width,
     uint32_t height);
 MBResult mbSwapchainSize(void *backend, uint64_t swapchain);

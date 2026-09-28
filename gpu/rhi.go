@@ -47,7 +47,14 @@ type Buffer struct {
 }
 
 // Valid reports whether the buffer refers to a live allocation.
-func (b Buffer) IsValid() bool { return b.H != 0 }
+func (b Buffer) IsValid() bool {
+	return b.H != 0
+}
+
+// TODO: buffer should be opaque
+// func (b Buffer) Size() uint64 {
+// 	return b.Size
+// }
 
 // Write copies data into the buffer's persistently-mapped memory at byteOffset.
 // It panics rather than segfaulting if the buffer has no mapped pointer (a
@@ -84,15 +91,39 @@ type Sampler struct {
 	H     Handle
 }
 
+func (s Sampler) IsValid() bool {
+	return s.H != 0
+}
+
 // Pipeline is a compiled compute or graphics pipeline. Graphics pipelines carry
 // only formats + topology + minimal state; everything else is dynamic or root data.
-type Pipeline struct{ H Handle }
+type Pipeline struct {
+	H Handle
+}
 
-func (p Pipeline) IsValid() bool { return p.H != 0 }
+func (p Pipeline) IsValid() bool {
+	return p.H != 0
+}
 
 // Swapchain is a window's presentation chain. Backbuffers are surfaced as
 // Textures (render targets) via AcquireNext.
-type Swapchain struct{ H Handle }
+type Swapchain struct {
+	H Handle
+}
+
+func (s Swapchain) IsValid() bool {
+	return s.H != 0
+}
+
+// SwapchainDescriptor describes a window's presentation chain.
+type SwapchainDescriptor struct {
+	Width, Height uint32
+	// Format is the backbuffers' format, one of Backend.SwapchainFormats for the
+	// surface. An sRGB format lets shaders write linear colour: the hardware encodes it
+	// as it stores, and decodes it to blend. FormatUndefined picks the backend's
+	// default, an 8-bit unorm format.
+	Format Format
+}
 
 // Fence is a submission completion token.
 type Fence struct{ H Handle }
@@ -445,7 +476,11 @@ const (
 // Shader bytes are backend-specific: Vulkan accepts SPIR-V; Metal accepts MSL,
 // metallib, or a precompiled artifact containing local threadgroup metadata.
 type PipelineDescriptor struct {
-	VertexShader   []byte
+	VertexShader []byte
+	// FragmentShader may be nil, for a pipeline that writes depth and nothing else — a
+	// shadow map or a depth prepass. That is not the same as binding one that outputs
+	// nothing: a fragment stage still runs per fragment, and against a pass that has a
+	// colour attachment it writes an UNDEFINED value rather than leaving it alone.
 	FragmentShader []byte
 	VertexEntry    string // empty => backend default (Vulkan: "main", Metal: "main0")
 	FragmentEntry  string // empty => backend default (Vulkan: "main", Metal: "main0")
@@ -530,7 +565,13 @@ type Backend interface {
 	// Presentation. surface is a platform window handle (e.g. CAMetalLayer /
 	// HWND / xcb) the backend wraps in a VkSurface. It is an opaque uintptr so the
 	// interface stays free of unsafe; backends reinterpret it as needed.
-	CreateSwapchain(surface uintptr, width, height uint32) Swapchain
+	// SwapchainFormats lists the backbuffer formats the surface can present, for
+	// SwapchainDescriptor.Format.
+	SwapchainFormats(surface uintptr) []Format
+	// CreateSwapchain fails when desc.Format is not one of SwapchainFormats.
+	CreateSwapchain(surface uintptr, desc SwapchainDescriptor) (Swapchain, error)
+	// ResizeSwapchain recreates the backbuffers at a new size, keeping the rest of the
+	// swapchain's descriptor.
 	ResizeSwapchain(sc Swapchain, width, height uint32)
 	// AcquireNext returns the next backbuffer as a render-target Texture plus a
 	// fence that signals when it's safe to reuse.
