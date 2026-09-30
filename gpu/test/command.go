@@ -61,8 +61,6 @@ func (c *commandBuffer) WriteTimestamp(pool gpu.QueryPool, index uint32, at gpu.
 	}
 }
 
-func (c *commandBuffer) PrepareSampled(t gpu.Texture, at gpu.Stage) {}
-
 func (c *commandBuffer) CopyBuffer(dst, src gpu.Buffer, dstOffset, srcOffset, size uint64) {
 	c.backend.mu.Lock()
 	defer c.backend.mu.Unlock()

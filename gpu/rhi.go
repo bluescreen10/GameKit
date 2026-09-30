@@ -524,9 +524,9 @@ type DepthAttachment struct {
 	Load    LoadOp
 	Store   StoreOp
 	Clear   float32
-	// ReadOnly binds the depth buffer for testing only (no writes), in a layout that
-	// also permits sampling the same image from the bindless heap during the pass.
-	// A pipeline used with it must have DepthWrite false.
+	// ReadOnly binds the depth buffer for testing only (no writes), so the same image
+	// may be sampled from the bindless heap during the pass. A pipeline used with it
+	// must have DepthWrite false.
 	ReadOnly bool
 }
 
@@ -659,7 +659,11 @@ type CommandBuffer interface {
 	Dispatch(data []byte, x, y, z uint32)
 	DispatchIndirect(data []byte, args Buffer, offset uint64)
 
-	// Barrier orders producer→consumer stages on the queue (no resource lists).
+	// Barrier orders producer→consumer stages on the queue (no resource lists). It
+	// is the only ordering there is: textures as much as buffers, and nothing is
+	// ordered implicitly — not even two render passes onto the same target. Whatever
+	// reads or writes what an earlier command wrote needs one in between, such as
+	// Barrier(StageColorOutput, StageFragment) before sampling an image just rendered.
 	Barrier(src, dst Stage, flags BarrierFlags)
 
 	// GPU timestamps. ResetTimestamps clears a pool's slots (record before writing,
@@ -667,11 +671,6 @@ type CommandBuffer interface {
 	// index once execution reaches `at`.
 	ResetTimestamps(pool QueryPool, count uint32)
 	WriteTimestamp(pool QueryPool, index uint32, at Stage)
-
-	// PrepareSampled transitions a texture to be sampled from the bindless heap in
-	// shaders (e.g. after an upload copy), making the write visible at stage `at`.
-	// The gpu hides layouts, so this is how a producer hands a texture to samplers.
-	PrepareSampled(t Texture, at Stage)
 
 	// Copies.
 	CopyBuffer(dst, src Buffer, dstOffset, srcOffset, size uint64)

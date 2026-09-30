@@ -59,6 +59,7 @@ func TestMemoryAndTextureCopies(t *testing.T) {
 	clear(unsafe.Slice((*byte)(dst.Ptr), 512))
 	c = b.Begin()
 	c.CopyBufferToTexture(tex, 1, 1, src, 4)
+	c.Barrier(gpu.StageTransfer, gpu.StageTransfer, 0)
 	c.CopyTextureToBuffer(dst, tex, 1, 1)
 	b.Wait(b.Submit(c))
 	if !bytes.Equal(data[4:4+7*5*4], unsafe.Slice((*byte)(dst.Ptr), 7*5*4)) {
@@ -155,6 +156,7 @@ func TestRenderPassSplit(t *testing.T) {
 	c.WriteTimestamp(pool, 0, gpu.StageColorOutput)
 	c.Draw(nil, 3, 1, 0, 0)
 	c.EndRenderPass()
+	c.Barrier(gpu.StageColorOutput, gpu.StageTransfer, 0)
 	c.CopyTextureToBuffer(read, target, 0, 0)
 	b.Wait(b.Submit(c))
 	pixels := unsafe.Slice((*byte)(read.Ptr), 8*8*4)

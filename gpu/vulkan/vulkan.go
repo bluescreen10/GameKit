@@ -54,8 +54,10 @@ type Backend struct {
 	descSet        C.VkDescriptorSet
 	pipelineLayout C.VkPipelineLayout
 
-	capSampled, capStorage, capSampler    uint32
-	sampledNext, storageNext, samplerNext uint32
+	capSampled, capStorage, capSampler uint32
+	// textureNext is the next index in the sampled and storage arrays, which share one
+	// index space; samplerNext the next in the sampler array.
+	textureNext, samplerNext uint32
 
 	// Transient command recording.
 	cmdPool C.VkCommandPool
@@ -69,6 +71,12 @@ type Backend struct {
 	swapchains map[uint64]*swapchainState
 	queryPools map[uint64]C.VkQueryPool
 	activeSwap *swapchainState // set between AcquireNext and Present
+
+	// uninitialized holds the textures still in VK_IMAGE_LAYOUT_UNDEFINED: created, or
+	// a backbuffer just acquired. The next command buffer to record a pass, dispatch,
+	// copy or barrier moves them to GENERAL first — at the latest the next one begun,
+	// which is what covers a texture whose first use is a compute shader writing it.
+	uninitialized []uint64
 
 	// nextID hands out backend-private handle ids. Atomic so resources can be
 	// created from multiple goroutines without a lock on the counter itself.
@@ -121,6 +129,9 @@ func (b *Backend) Init() error {
 	}
 	if r := C.vkbPickPhysical(b.instance, &b.physicalDevice); r != C.VK_SUCCESS {
 		C.vkDestroyInstance(b.instance, nil)
+		if r == C.VK_ERROR_FEATURE_NOT_PRESENT {
+			return fmt.Errorf("vulkan: no device supports VK_KHR_unified_image_layouts")
+		}
 		return fmt.Errorf("vulkan: no physical device (%d)", int(r))
 	}
 	fam := C.vkbGraphicsQueueFamily(b.physicalDevice)

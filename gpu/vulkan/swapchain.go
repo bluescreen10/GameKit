@@ -98,7 +98,7 @@ func (b *Backend) buildSwapchain(s *swapchainState, width, height uint32, old C.
 		hh := b.nextID.Add(1)
 		b.textures[hh] = &textureEntry{
 			img: imgs[i], view: view, format: s.format,
-			width: s.w, height: s.h, layout: C.VK_IMAGE_LAYOUT_UNDEFINED, owned: false,
+			width: s.w, height: s.h, owned: false,
 		}
 		s.images[i] = gpu.Texture{H: gpu.Handle(hh)}
 		C.vkbCreateSemaphore(b.device, &s.acquire[i])
@@ -116,12 +116,10 @@ func (b *Backend) AcquireNext(sc gpu.Swapchain) (gpu.Texture, gpu.Fence) {
 	C.vkbAcquire(b.device, s.swap, s.acquire[s.frame], &idx)
 	s.curImage = uint32(idx)
 	b.activeSwap = s
-	// Fresh acquire: the image's prior contents are undefined for our purposes, and
-	// last frame's producer is no longer the hazard to order against (the acquire
-	// semaphore covers that), so clear the tracked access too.
-	e := b.tex(s.images[s.curImage])
-	e.layout = C.VK_IMAGE_LAYOUT_UNDEFINED
-	e.lastStage, e.lastAccess = 0, 0
+	// Fresh acquire: the presentation engine hands the image back in PRESENT_SRC, and
+	// its prior contents are undefined for our purposes, so it starts again from
+	// UNDEFINED, like a new image.
+	b.uninitialized = append(b.uninitialized, uint64(s.images[s.curImage].H))
 	return s.images[s.curImage], gpu.Fence{}
 }
 
@@ -134,8 +132,7 @@ func (b *Backend) Present(sc gpu.Swapchain, cmd gpu.CommandBuffer) {
 
 	// Transition the backbuffer to PRESENT_SRC before ending the buffer.
 	e := b.tex(s.images[s.curImage])
-	C.vkbPresentBarrier(c.cb, e.img, e.layout)
-	e.layout = C.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+	C.vkbPresentBarrier(c.cb, e.img)
 	C.vkEndCommandBuffer(c.cb)
 
 	var noFence C.VkFence

@@ -11,38 +11,22 @@ import (
 	"github.com/bluescreen10/gamekit/gpu"
 )
 
-// textureEntry is the backend record for a Texture handle. layout tracks the
-// image's current Vulkan layout so the backend can transition it internally
-// (the gpu API hides layouts, but Vulkan still requires them).
+// textureEntry is the backend record for a Texture handle.
 //
-// lastStage/lastAccess track how the image was last used, so a transition can name
-// the real producer as its source scope. Without this, a barrier that guesses
-// TOP_OF_PIPE establishes no dependency on the previous pass's writes, and reads or
-// re-writes of the same image across render passes race (Vulkan does not order
-// separate render pass instances implicitly).
+// It records no layout. With VK_KHR_unified_image_layouts every image lives in
+// VK_IMAGE_LAYOUT_GENERAL, once it has left UNDEFINED (see Backend.uninitialized), and
+// ordering its uses is the caller's, through gpu.CommandBuffer.Barrier.
 type textureEntry struct {
-	img        C.VkImage
-	mem        C.VkDeviceMemory
-	view       C.VkImageView
-	format     C.VkFormat
-	width      uint32
-	height     uint32
-	layout     C.VkImageLayout
-	lastStage  C.VkPipelineStageFlags2
-	lastAccess C.VkAccessFlags2
-	depth      bool
+	img    C.VkImage
+	mem    C.VkDeviceMemory
+	view   C.VkImageView
+	format C.VkFormat
+	// width, height and depth are the base level's extent; depth is 1 but for a 3D
+	// texture.
+	width, height, depth uint32
+	isDepthFormat        bool
 	// swapchain-owned backbuffers set owned=false so Destroy skips image/mem.
 	owned bool
-}
-
-// sampledLayout is the layout a texture rests in while it's read through the bindless
-// heap. Depth images use DEPTH_STENCIL_READ_ONLY_OPTIMAL so they may simultaneously be
-// bound as a read-only depth attachment (see PrepareSampled / BeginRenderPass).
-func sampledLayout(depth bool) C.VkImageLayout {
-	if depth {
-		return C.VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-	}
-	return C.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
 }
 
 func viewType(k gpu.TextureKind) C.VkImageViewType {
@@ -85,8 +69,12 @@ func imageUsage(u gpu.TextureUsage, depth bool) C.VkImageUsageFlags {
 // (Texture.Index is the heap slot).
 func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	layers := d.Layers
-	if layers == 0 {
+	if layers == 0 || d.Kind == gpu.Texture3D {
 		layers = 1
+	}
+	depth := d.Depth
+	if depth == 0 {
+		depth = 1
 	}
 	mips := d.Mips
 	if mips == 0 {
@@ -102,7 +90,7 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	var mem C.VkDeviceMemory
 	var view C.VkImageView
 	r := C.vkbCreateImage(b.device, b.physicalDevice, vkFormat(d.Format),
-		C.uint32_t(d.Width), C.uint32_t(d.Height), C.uint32_t(layers), C.uint32_t(mips),
+		C.uint32_t(d.Width), C.uint32_t(d.Height), C.uint32_t(depth), C.uint32_t(layers), C.uint32_t(mips),
 		imageUsage(d.Usage, isDepth), aspect, viewType(d.Kind),
 		&img, &mem, &view)
 	if r != C.VK_SUCCESS {
@@ -112,21 +100,37 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	h := b.nextID.Add(1)
 	b.textures[h] = &textureEntry{
 		img: img, mem: mem, view: view, format: vkFormat(d.Format),
-		width: d.Width, height: d.Height, layout: C.VK_IMAGE_LAYOUT_UNDEFINED,
-		depth: isDepth, owned: true,
+		width: d.Width, height: d.Height, depth: depth, isDepthFormat: isDepth, owned: true,
 	}
+	b.uninitialized = append(b.uninitialized, h)
 
+	// One index for both arrays: a shader samples gTextures[i] and writes gImages[i],
+	// with the same i, which is also how Metal's single texture table works.
 	tex := gpu.Texture{H: gpu.Handle(h)}
+	if d.Usage&(gpu.TextureSampled|gpu.TextureStorage) != 0 {
+		tex.Index = b.nextTextureIndex(d.Usage)
+	}
 	if d.Usage&gpu.TextureSampled != 0 {
-		tex.Index = b.sampledNext
-		b.sampledNext++
-		C.vkbWriteSampledImage(b.device, b.descSet, C.uint32_t(tex.Index), view, sampledLayout(isDepth))
-	} else if d.Usage&gpu.TextureStorage != 0 {
-		tex.Index = b.storageNext
-		b.storageNext++
+		C.vkbWriteSampledImage(b.device, b.descSet, C.uint32_t(tex.Index), view)
+	}
+	if d.Usage&gpu.TextureStorage != 0 {
 		C.vkbWriteStorageImage(b.device, b.descSet, C.uint32_t(tex.Index), view)
 	}
 	return tex
+}
+
+// nextTextureIndex hands out the next index in the texture arrays, panicking when it
+// falls outside an array the texture is written into.
+func (b *Backend) nextTextureIndex(usage gpu.TextureUsage) uint32 {
+	index := b.textureNext
+	if usage&gpu.TextureSampled != 0 && index >= b.capSampled {
+		panic(fmt.Sprintf("vulkan: sampled-image heap is full (%d)", b.capSampled))
+	}
+	if usage&gpu.TextureStorage != 0 && index >= b.capStorage {
+		panic(fmt.Sprintf("vulkan: storage-image heap is full (%d)", b.capStorage))
+	}
+	b.textureNext++
+	return index
 }
 
 // TextureView registers an additional sampled view over a subresource range of an
@@ -139,7 +143,7 @@ func (b *Backend) TextureView(t gpu.Texture, kind gpu.TextureKind, baseMip, mipC
 		panic("vulkan: TextureView of unknown texture")
 	}
 	aspect := C.VkImageAspectFlags(C.VK_IMAGE_ASPECT_COLOR_BIT)
-	if src.depth {
+	if src.isDepthFormat {
 		aspect = C.VK_IMAGE_ASPECT_DEPTH_BIT
 	}
 	if mipCount == 0 {
@@ -157,12 +161,11 @@ func (b *Backend) TextureView(t gpu.Texture, kind gpu.TextureKind, baseMip, mipC
 
 	h := b.nextID.Add(1)
 	b.textures[h] = &textureEntry{
-		view: view, format: src.format, width: src.width, height: src.height,
-		layout: C.VK_IMAGE_LAYOUT_UNDEFINED, depth: src.depth, owned: false,
+		view: view, format: src.format, width: src.width, height: src.height, depth: src.depth,
+		isDepthFormat: src.isDepthFormat, owned: false,
 	}
-	tex := gpu.Texture{H: gpu.Handle(h), Index: b.sampledNext}
-	b.sampledNext++
-	C.vkbWriteSampledImage(b.device, b.descSet, C.uint32_t(tex.Index), view, sampledLayout(src.depth))
+	tex := gpu.Texture{H: gpu.Handle(h), Index: b.nextTextureIndex(gpu.TextureSampled)}
+	C.vkbWriteSampledImage(b.device, b.descSet, C.uint32_t(tex.Index), view)
 	return tex
 }
 

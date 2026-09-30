@@ -22,7 +22,37 @@
     return vkCreateInstance(&ci, NULL, out);
 }
 
-// pickPhysical chooses a device, preferring a discrete GPU.
+// supportsUnifiedImageLayouts reports whether pd offers VK_KHR_unified_image_layouts
+// with its unifiedImageLayouts feature: every image lives in VK_IMAGE_LAYOUT_GENERAL
+// for its whole life, which is what lets the gpu API have no layouts at all.
+static int vkbSupportsUnifiedImageLayouts(VkPhysicalDevice pd) {
+    uint32_t n = 0;
+    vkEnumerateDeviceExtensionProperties(pd, NULL, &n, NULL);
+    VkExtensionProperties* exts = (VkExtensionProperties*)malloc(n * sizeof(VkExtensionProperties));
+    vkEnumerateDeviceExtensionProperties(pd, NULL, &n, exts);
+    int found = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (strcmp(exts[i].extensionName, VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME) == 0) {
+            found = 1;
+            break;
+        }
+    }
+    free(exts);
+    if (!found) {
+        return 0;
+    }
+
+    VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified = {0};
+    unified.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR;
+    VkPhysicalDeviceFeatures2 f2 = {0};
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &unified;
+    vkGetPhysicalDeviceFeatures2(pd, &f2);
+    return unified.unifiedImageLayouts == VK_TRUE;
+}
+
+// pickPhysical chooses a device supporting unified image layouts, preferring a
+// discrete GPU. VK_ERROR_FEATURE_NOT_PRESENT means devices exist but none supports them.
 // TODO: allow the user to define what device they want
  VkResult vkbPickPhysical(VkInstance inst, VkPhysicalDevice* out) {
     uint32_t n = 0;
@@ -34,19 +64,27 @@
 
     VkPhysicalDevice* devs = (VkPhysicalDevice*)malloc(n * sizeof(VkPhysicalDevice));
     vkEnumeratePhysicalDevices(inst, &n, devs);
-    VkPhysicalDevice chosen = devs[0];
+    VkPhysicalDevice chosen = VK_NULL_HANDLE;
 
 	for (uint32_t i = 0; i < n; i++) {
+        if (!vkbSupportsUnifiedImageLayouts(devs[i])) {
+            continue;
+        }
         VkPhysicalDeviceProperties p;
         vkGetPhysicalDeviceProperties(devs[i], &p);
-        if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+        if (chosen == VK_NULL_HANDLE || p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 			chosen = devs[i];
+		}
+        if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
 			break;
 		}
     }
-
-	*out = chosen;
     free(devs);
+
+    if (chosen == VK_NULL_HANDLE) {
+        return VK_ERROR_FEATURE_NOT_PRESENT;
+    }
+	*out = chosen;
     return VK_SUCCESS;
 }
 
@@ -69,7 +107,8 @@
 }
 
 // createDevice enables the 1.3 feature chain the gpu relies on: buffer device
-// address, descriptor indexing (bindless heaps), dynamic rendering, sync2.
+// address, descriptor indexing (bindless heaps), dynamic rendering, sync2 — and
+// unified image layouts, which vkbPickPhysical has already checked for.
 // TODO: when we move to multi-threading use dedicated transfer queues
  VkResult vkbCreateDevice(VkPhysicalDevice pd, uint32_t fam, VkDevice* outDev, VkQueue* outQueue) {
     float prio = 1.0f;
@@ -100,6 +139,11 @@
     f13.synchronization2 = VK_TRUE;
     f12.pNext = &f13;
 
+    VkPhysicalDeviceUnifiedImageLayoutsFeaturesKHR unified = {0};
+    unified.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR;
+    unified.unifiedImageLayouts = VK_TRUE;
+    f13.pNext = &unified;
+
     // Base features: drawIndirectFirstInstance lets each indirect command set its
     // own firstInstance, so one multi-draw-indirect call can cover many geometries
     // (gl_InstanceIndex directly indexes the compacted visible buffer).
@@ -116,16 +160,19 @@
     // compiler emit the Int64 capability. Without this, every shader with an address
     // in its root fails to create — silently, as a blank frame rather than an error.
     f2.features.shaderInt64 = VK_TRUE;
+    // Storage images are declared without a format qualifier, so one array serves every
+    // format; writing through one needs this. Reads go through sampling instead.
+    f2.features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
     f2.pNext = &f12;
 
-    const char* devExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    const char* devExts[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME };
 
     VkDeviceCreateInfo ci = {0};
     ci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     ci.pNext = &f2; // features2 chain (pEnabledFeatures must be NULL when using it)
     ci.queueCreateInfoCount = 1;
     ci.pQueueCreateInfos = &qi;
-    ci.enabledExtensionCount = 1;
+    ci.enabledExtensionCount = 2;
     ci.ppEnabledExtensionNames = devExts;
 
     VkResult r = vkCreateDevice(pd, &ci, NULL, outDev);
@@ -323,13 +370,13 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
  VkPipelineStageFlags2 vkbStageLateDepth(void) { return VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT; }
  VkPipelineStageFlags2 vkbStageCompute(void) { return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT; }
  VkPipelineStageFlags2 vkbStageTransfer(void) { return VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT; }
- VkPipelineStageFlags2 vkbStageCopy(void) { return VK_PIPELINE_STAGE_2_COPY_BIT; }
  VkPipelineStageFlags2 vkbStageAll(void) { return VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; }
 
  VkAccessFlags2 vkbAccessNone(void) { return VK_ACCESS_2_NONE; }
  VkAccessFlags2 vkbAccessIndirectRead(void) { return VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT; }
  VkAccessFlags2 vkbAccessShaderRead(void) { return VK_ACCESS_2_SHADER_READ_BIT; }
  VkAccessFlags2 vkbAccessShaderWrite(void) { return VK_ACCESS_2_SHADER_WRITE_BIT; }
+ VkAccessFlags2 vkbAccessColorRead(void) { return VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT; }
  VkAccessFlags2 vkbAccessColorWrite(void) { return VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT; }
  VkAccessFlags2 vkbAccessDepthRead(void) { return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT; }
  VkAccessFlags2 vkbAccessDepthWrite(void) { return VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT; }
@@ -383,16 +430,17 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     return vkQueueSubmit2(q, 1, &si, *outFence);
 }
 
-// vkbImageBarrier transitions an image between layouts (sync2).
- void vkbImageBarrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
-                            VkImageLayout oldL, VkImageLayout newL,
-                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+// vkbInitializeImage moves a new image, or a freshly acquired backbuffer, out of
+// VK_IMAGE_LAYOUT_UNDEFINED into VK_IMAGE_LAYOUT_GENERAL, where it stays. Its contents
+// are discarded. The source scope is every stage, so the barrier also chains with an
+// acquire semaphore's wait.
+ void vkbInitializeImage(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect) {
     VkImageMemoryBarrier2 ib = {0};
     ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    ib.srcStageMask = srcStage; ib.srcAccessMask = srcAccess;
-    ib.dstStageMask = dstStage; ib.dstAccessMask = dstAccess;
-    ib.oldLayout = oldL; ib.newLayout = newL;
+    ib.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT; ib.srcAccessMask = VK_ACCESS_2_NONE;
+    ib.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    ib.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    ib.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; ib.newLayout = VK_IMAGE_LAYOUT_GENERAL;
     ib.image = img;
     ib.subresourceRange.aspectMask = aspect;
     ib.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
@@ -421,16 +469,16 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 // vkbBeginRendering starts dynamic rendering with up to 4 color attachments (0 for a
 // depth-only pass, e.g. a shadow map; up to 4 for MRT, e.g. the G-buffer fill) and an
 // optional depth attachment. colors/loads/clears are parallel arrays of length nColor
-// (clears is nColor*4 floats, rgba per attachment).
+// (clears is nColor*4 floats, rgba per attachment). Every attachment is in
+// VK_IMAGE_LAYOUT_GENERAL, as every image is.
  void vkbBeginRendering(VkCommandBuffer cb, uint32_t w, uint32_t h,
                               const VkImageView* colors, const int* loads, const float* clears, uint32_t nColor,
-                              int hasDepth, VkImageView depth, int depthClear, float dclear,
-                              VkImageLayout depthLayout) {
+                              int hasDepth, VkImageView depth, int depthClear, float dclear) {
     VkRenderingAttachmentInfo cis[4] = {0};
     for (uint32_t i = 0; i < nColor; i++) {
         cis[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         cis[i].imageView = colors[i];
-        cis[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        cis[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         cis[i].loadOp = loads[i] ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         cis[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         cis[i].clearValue.color.float32[0] = clears[i * 4 + 0];
@@ -442,7 +490,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     VkRenderingAttachmentInfo di = {0};
     di.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     di.imageView = depth;
-    di.imageLayout = depthLayout;
+    di.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     di.loadOp = depthClear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     di.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     di.clearValue.depthStencil.depth = dclear;
@@ -457,27 +505,27 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     vkCmdBeginRendering(cb, &ri);
 }
 
- void vkbCopyImageToBuffer(VkCommandBuffer cb, VkImage img, VkBuffer buf, uint32_t w, uint32_t h,
+ void vkbCopyImageToBuffer(VkCommandBuffer cb, VkImage img, VkBuffer buf, uint32_t w, uint32_t h, uint32_t d,
                                  uint32_t mip, uint32_t layer, VkImageAspectFlags aspect) {
     VkBufferImageCopy c = {0};
     c.imageSubresource.aspectMask = aspect;
     c.imageSubresource.mipLevel = mip;
     c.imageSubresource.baseArrayLayer = layer;
     c.imageSubresource.layerCount = 1;
-    c.imageExtent.width = w; c.imageExtent.height = h; c.imageExtent.depth = 1;
-    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &c);
+    c.imageExtent.width = w; c.imageExtent.height = h; c.imageExtent.depth = d;
+    vkCmdCopyImageToBuffer(cb, img, VK_IMAGE_LAYOUT_GENERAL, buf, 1, &c);
 }
 
  void vkbCopyBufferToImage(VkCommandBuffer cb, VkBuffer buf, uint64_t srcOffset, VkImage img,
-                                 uint32_t w, uint32_t h, uint32_t mip, uint32_t layer, VkImageAspectFlags aspect) {
+                                 uint32_t w, uint32_t h, uint32_t d, uint32_t mip, uint32_t layer, VkImageAspectFlags aspect) {
     VkBufferImageCopy c = {0};
     c.bufferOffset = srcOffset;
     c.imageSubresource.aspectMask = aspect;
     c.imageSubresource.mipLevel = mip;
     c.imageSubresource.baseArrayLayer = layer;
     c.imageSubresource.layerCount = 1;
-    c.imageExtent.width = w; c.imageExtent.height = h; c.imageExtent.depth = 1;
-    vkCmdCopyBufferToImage(cb, buf, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+    c.imageExtent.width = w; c.imageExtent.height = h; c.imageExtent.depth = d;
+    vkCmdCopyBufferToImage(cb, buf, img, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
 }
 
  void vkbPush(VkCommandBuffer cb, VkPipelineLayout layout, const void* data, uint32_t size) {
@@ -865,14 +913,16 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     return vkAcquireNextImageKHR(dev, swap, UINT64_MAX, sem, VK_NULL_HANDLE, outIndex);
 }
 
-// vkbPresentBarrier transitions a backbuffer from oldL to PRESENT_SRC.
- void vkbPresentBarrier(VkCommandBuffer cb, VkImage img, VkImageLayout oldL) {
+// vkbPresentBarrier transitions a backbuffer from GENERAL to PRESENT_SRC — the one
+// layout unified image layouts leave in place, since the presentation engine reads it.
+// Anything may have written the backbuffer last: a draw, a copy.
+ void vkbPresentBarrier(VkCommandBuffer cb, VkImage img) {
     VkImageMemoryBarrier2 ib = {0};
     ib.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-    ib.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    ib.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    ib.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    ib.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
     ib.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
-    ib.oldLayout = oldL;
+    ib.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     ib.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     ib.image = img;
     ib.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -925,14 +975,14 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 // vkbCreateImage creates an image + dedicated device-local memory + a default
 // view. usage is a VkImageUsageFlags mask assembled on the Go side.
  VkResult vkbCreateImage(VkDevice dev, VkPhysicalDevice phys,
-                               VkFormat fmt, uint32_t w, uint32_t h, uint32_t layers, uint32_t mips,
+                               VkFormat fmt, uint32_t w, uint32_t h, uint32_t depth, uint32_t layers, uint32_t mips,
                                VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageViewType viewType,
                                VkImage* outImg, VkDeviceMemory* outMem, VkImageView* outView) {
     VkImageCreateInfo ci = {0};
     ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.imageType = viewType == VK_IMAGE_VIEW_TYPE_3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
     ci.format = fmt;
-    ci.extent.width = w; ci.extent.height = h; ci.extent.depth = 1;
+    ci.extent.width = w; ci.extent.height = h; ci.extent.depth = depth;
     ci.mipLevels = mips;
     ci.arrayLayers = layers;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -979,17 +1029,13 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     return VK_SUCCESS;
 }
 
-// vkbWriteSampledImage registers a view into the bindless sampled-image array. layout
-// is the layout the image is guaranteed to be in whenever this descriptor is used —
-// SHADER_READ_ONLY_OPTIMAL for color, DEPTH_STENCIL_READ_ONLY_OPTIMAL for depth (which
-// additionally permits the image to be bound as a read-only depth attachment in the
-// same render pass, so the deferred lighting pass can depth-test against the very
-// buffer it samples).
- void vkbWriteSampledImage(VkDevice dev, VkDescriptorSet set, uint32_t index, VkImageView view,
-                                 VkImageLayout layout) {
+// vkbWriteSampledImage registers a view into the bindless sampled-image array. The
+// image is in VK_IMAGE_LAYOUT_GENERAL whenever the descriptor is used, as every image
+// is — including a depth buffer bound as an attachment in the same pass.
+ void vkbWriteSampledImage(VkDevice dev, VkDescriptorSet set, uint32_t index, VkImageView view) {
     VkDescriptorImageInfo ii = {0};
     ii.imageView = view;
-    ii.imageLayout = layout;
+    ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     VkWriteDescriptorSet w = {0};
     w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     w.dstSet = set;

@@ -505,9 +505,6 @@ func (c *command) Barrier(src, dst gpu.Stage, f gpu.BarrierFlags) {
 	c.ready()
 	result(C.mbBarrier(c.b.native, C.uint64_t(c.h)))
 }
-func (c *command) PrepareSampled(t gpu.Texture, s gpu.Stage) {
-	c.Barrier(gpu.StageAll, s, 0)
-}
 
 func (c *command) CopyBuffer(dst, src gpu.Buffer, do, so, size uint64) {
 	c.ready()

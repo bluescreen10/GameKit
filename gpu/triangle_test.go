@@ -62,6 +62,7 @@ func TestTriangle(t *testing.T) {
 	cmd.SetScissor(0, 0, size, size)
 	cmd.Draw(utils.ToBytes(&rootAddr), 3, 1, 0, 0)
 	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput, gpu.StageTransfer, 0)
 	cmd.CopyTextureToBuffer(readback, target, 0, 0)
 	f := b.Submit(cmd)
 	b.Wait(f)

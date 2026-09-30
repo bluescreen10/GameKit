@@ -41,6 +41,12 @@ var (
 	texturedVert []byte
 	//go:embed testdata/textured.frag.spv
 	texturedFrag []byte
+	//go:embed testdata/storage_write.comp.spv
+	storageWrite []byte
+	//go:embed testdata/storage_write3d.comp.spv
+	storageWrite3D []byte
+	//go:embed testdata/sampled3d.frag.spv
+	sampled3DFrag []byte
 )
 
 var (
@@ -77,6 +83,9 @@ func testBackend(t *testing.T) gpu.Backend {
 			fillIndirect = variant("fill_indirect.comp")
 			texturedVert = variant("textured.vert")
 			texturedFrag = variant("textured.frag")
+			storageWrite = variant("storage_write.comp")
+			storageWrite3D = variant("storage_write3d.comp")
+			sampled3DFrag = variant("sampled3d.frag")
 		}
 		backendErr = backendInst.Init()
 	})

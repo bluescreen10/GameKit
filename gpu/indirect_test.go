@@ -81,6 +81,7 @@ func TestComputeIndirect(t *testing.T) {
 	cmd.SetScissor(0, 0, size, size)
 	cmd.DrawIndexedIndirect(utils.ToBytes(&graphicsRoot), ib, gpu.IndexUint32, indirect, 0, 1, 20)
 	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput, gpu.StageTransfer, 0)
 	cmd.CopyTextureToBuffer(readback, target, 0, 0)
 	f := b.Submit(cmd)
 	b.Wait(f)

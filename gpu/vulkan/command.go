@@ -24,13 +24,13 @@ var (
 	vkStageLateDepth  = C.vkbStageLateDepth()
 	vkStageCompute    = C.vkbStageCompute()
 	vkStageTransfer   = C.vkbStageTransfer()
-	vkStageCopy       = C.vkbStageCopy()
 	vkStageAll        = C.vkbStageAll()
 
 	vkAccessNone          = C.vkbAccessNone()
 	vkAccessIndirectRead  = C.vkbAccessIndirectRead()
 	vkAccessShaderRead    = C.vkbAccessShaderRead()
 	vkAccessShaderWrite   = C.vkbAccessShaderWrite()
+	vkAccessColorRead     = C.vkbAccessColorRead()
 	vkAccessColorWrite    = C.vkbAccessColorWrite()
 	vkAccessDepthRead     = C.vkbAccessDepthRead()
 	vkAccessDepthWrite    = C.vkbAccessDepthWrite()
@@ -68,6 +68,9 @@ type fenceEntry struct {
 type cmdBuffer struct {
 	b  *Backend
 	cb C.VkCommandBuffer
+	// inRenderPass is set between BeginRenderPass and EndRenderPass, where no image
+	// can be initialized: a barrier inside dynamic rendering may not change layouts.
+	inRenderPass bool
 }
 
 // Begin allocates a transient command buffer, begins recording, and binds the
@@ -81,7 +84,9 @@ func (b *Backend) Begin() gpu.CommandBuffer {
 		panic(fmt.Sprintf("vulkan: begin command buffer failed (%d)", int(r)))
 	}
 	C.vkbBindHeap(cb, b.pipelineLayout, b.descSet)
-	return &cmdBuffer{b: b, cb: cb}
+	c := &cmdBuffer{b: b, cb: cb}
+	c.initializeImages()
+	return c
 }
 
 // Submit ends recording and submits, returning a fence for the completion.
@@ -119,40 +124,39 @@ func (b *Backend) tex(t gpu.Texture) *textureEntry { return b.textures[uint64(t.
 func (b *Backend) bufRaw(buf gpu.Buffer) C.VkBuffer { return b.buffers[uint64(buf.H)].buf }
 
 func aspectOf(e *textureEntry) C.VkImageAspectFlags {
-	if e.depth {
+	if e.isDepthFormat {
 		return C.VK_IMAGE_ASPECT_DEPTH_BIT
 	}
 	return C.VK_IMAGE_ASPECT_COLOR_BIT
 }
 
-// transition moves an image to newLayout and orders the new access against however
-// the image was last used (e.lastStage/lastAccess), then records this access as the
-// new "last use". The source scope comes from the tracked state rather than the
-// caller so that cross-pass hazards — sampling a G-buffer the previous pass rendered,
-// or blending onto a color target a previous pass wrote — are actually synchronized;
-// a caller-supplied TOP_OF_PIPE would silently establish no dependency at all.
-//
-// The barrier is emitted even when the layout is unchanged: a write-after-write on the
-// same layout (two render passes onto one color target) still needs ordering.
-func (c *cmdBuffer) transition(e *textureEntry, newLayout C.VkImageLayout,
-	dstStage C.VkPipelineStageFlags2, dstAccess C.VkAccessFlags2) {
-	srcStage, srcAccess := e.lastStage, e.lastAccess
-	if srcStage == 0 {
-		srcStage = vkStageTop
+// initializeImages moves every texture still in UNDEFINED to GENERAL, where it then
+// stays for its whole life. It runs before anything that could be a texture's first use
+// outside a render pass — a pass, a dispatch, a copy, a barrier — so a texture created
+// while this command buffer records is ready before it is used.
+func (c *cmdBuffer) initializeImages() {
+	if c.inRenderPass {
+		return
 	}
-	C.vkbImageBarrier(c.cb, e.img, aspectOf(e), e.layout, newLayout, srcStage, srcAccess, dstStage, dstAccess)
-	e.layout = newLayout
-	e.lastStage, e.lastAccess = dstStage, dstAccess
+	for _, h := range c.b.uninitialized {
+		if e, ok := c.b.textures[h]; ok {
+			C.vkbInitializeImage(c.cb, e.img, aspectOf(e))
+		}
+	}
+	c.b.uninitialized = c.b.uninitialized[:0]
 }
 
 // maxColorAttachments bounds a single render pass's color targets (today's largest
 // user is the G-buffer fill: albedo/normal/metal-rough + emissive-to-color).
 const maxColorAttachments = 4
 
+// BeginRenderPass starts rendering into rt. It orders nothing: a pass using an image
+// an earlier command wrote needs a Barrier before it.
 func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 	if len(rt.Color) > maxColorAttachments {
 		panic("vulkan: BeginRenderPass: too many color attachments")
 	}
+	c.initializeImages()
 	var w, h uint32
 	var views [maxColorAttachments]C.VkImageView
 	var loads [maxColorAttachments]C.int
@@ -168,14 +172,11 @@ func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 		clears[i*4+1] = C.float(ca.Clear[1])
 		clears[i*4+2] = C.float(ca.Clear[2])
 		clears[i*4+3] = C.float(ca.Clear[3])
-		c.transition(e, C.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-			vkStageColor, vkAccessColorWrite)
 	}
 	var depthView C.VkImageView
 	hasDepth := C.int(0)
 	depthClear := C.int(0)
 	var dclear float32
-	depthLayout := C.VkImageLayout(C.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL)
 	if rt.Depth != nil {
 		e := c.b.tex(rt.Depth.Texture)
 		w, h = e.width, e.height
@@ -185,19 +186,8 @@ func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 		if rt.Depth.Load == gpu.LoadClear {
 			depthClear = 1
 		}
-		// A read-only depth attachment rests in DEPTH_STENCIL_READ_ONLY_OPTIMAL — the
-		// same layout its bindless descriptor declares — so the pass may depth-test
-		// against the image while also sampling it (deferred lighting does both).
-		if rt.Depth.ReadOnly {
-			depthLayout = sampledLayout(true)
-			c.transition(e, depthLayout,
-				vkStageEarlyDepth|vkStageLateDepth|vkStageFragment,
-				vkAccessDepthRead|vkAccessShaderRead)
-		} else {
-			c.transition(e, depthLayout,
-				vkStageEarlyDepth|vkStageLateDepth,
-				vkAccessDepthWrite)
-		}
+		// A read-only depth attachment needs nothing of its own: in GENERAL the pass may
+		// depth-test against the image while also sampling it.
 	}
 	var viewsPtr *C.VkImageView
 	var loadsPtr *C.int
@@ -207,10 +197,14 @@ func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 	}
 	C.vkbBeginRendering(c.cb, C.uint32_t(w), C.uint32_t(h),
 		viewsPtr, loadsPtr, clearsPtr, C.uint32_t(len(rt.Color)),
-		hasDepth, depthView, depthClear, C.float(dclear), depthLayout)
+		hasDepth, depthView, depthClear, C.float(dclear))
+	c.inRenderPass = true
 }
 
-func (c *cmdBuffer) EndRenderPass() { C.vkCmdEndRendering(c.cb) }
+func (c *cmdBuffer) EndRenderPass() {
+	C.vkCmdEndRendering(c.cb)
+	c.inRenderPass = false
+}
 
 // SetPipeline binds a pipeline to its own bind point (graphics or compute),
 // recorded when the pipeline was created.
@@ -281,28 +275,24 @@ func (c *cmdBuffer) DrawIndexedIndirect(data []byte, indexBuf gpu.Buffer, indexT
 }
 
 func (c *cmdBuffer) Dispatch(data []byte, x, y, z uint32) {
+	c.initializeImages()
 	c.push(data)
 	C.vkCmdDispatch(c.cb, C.uint32_t(x), C.uint32_t(y), C.uint32_t(z))
 }
 
 func (c *cmdBuffer) DispatchIndirect(data []byte, args gpu.Buffer, offset uint64) {
+	c.initializeImages()
 	c.push(data)
 	C.vkCmdDispatchIndirect(c.cb, c.b.bufRaw(args), C.VkDeviceSize(offset))
 }
 
+// Barrier is a global memory barrier. With every image in GENERAL it orders images as
+// well as buffers, so it is the only ordering the gpu API needs.
 func (c *cmdBuffer) Barrier(src, dst gpu.Stage, flags gpu.BarrierFlags) {
+	c.initializeImages()
 	ss, sa := stageAccess(src)
 	ds, da := stageAccess(dst)
 	C.vkbGlobalBarrier(c.cb, ss, sa, ds, da)
-}
-
-func (c *cmdBuffer) PrepareSampled(t gpu.Texture, at gpu.Stage) {
-	e := c.b.tex(t)
-	ds, _ := stageAccess(at)
-	if ds == 0 {
-		ds = vkStageFragment
-	}
-	c.transition(e, sampledLayout(e.depth), ds, vkAccessShaderRead)
 }
 
 func (c *cmdBuffer) CopyBuffer(dst, src gpu.Buffer, dstOffset, srcOffset, size uint64) {
@@ -311,34 +301,33 @@ func (c *cmdBuffer) CopyBuffer(dst, src gpu.Buffer, dstOffset, srcOffset, size u
 }
 
 func (c *cmdBuffer) CopyBufferToTexture(dst gpu.Texture, mip, layer uint32, src gpu.Buffer, srcOffset uint64) {
+	c.initializeImages()
 	e := c.b.tex(dst)
-	c.transition(e, C.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		vkStageCopy, vkAccessTransferWrite)
-	// A mip level is half the size of the one above it, floored at 1 — copying the
-	// base extent into a smaller level would overrun it.
-	w, h := mipExtent(e.width, e.height, mip)
+	w, h, d := mipExtent(e, mip)
 	C.vkbCopyBufferToImage(c.cb, c.b.bufRaw(src), C.uint64_t(srcOffset), e.img,
-		C.uint32_t(w), C.uint32_t(h), C.uint32_t(mip), C.uint32_t(layer), aspectOf(e))
+		C.uint32_t(w), C.uint32_t(h), C.uint32_t(d), C.uint32_t(mip), C.uint32_t(layer), aspectOf(e))
 }
 
 func (c *cmdBuffer) CopyTextureToBuffer(dst gpu.Buffer, src gpu.Texture, mip, layer uint32) {
+	c.initializeImages()
 	e := c.b.tex(src)
-	c.transition(e, C.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-		vkStageCopy, vkAccessTransferRead)
-	w, h := mipExtent(e.width, e.height, mip)
+	w, h, d := mipExtent(e, mip)
 	C.vkbCopyImageToBuffer(c.cb, e.img, c.b.bufRaw(dst),
-		C.uint32_t(w), C.uint32_t(h), C.uint32_t(mip), C.uint32_t(layer), aspectOf(e))
+		C.uint32_t(w), C.uint32_t(h), C.uint32_t(d), C.uint32_t(mip), C.uint32_t(layer), aspectOf(e))
 }
 
-// mipExtent returns level's dimensions for a base-size image: each level halves,
-// floored at 1 (so a 4x1 image's level 2 is 1x1, not 1x0).
-func mipExtent(w, h, level uint32) (uint32, uint32) {
-	w >>= level
-	h >>= level
-	return max(w, 1), max(h, 1)
+// mipExtent returns a texture's extent at level: each level halves every dimension,
+// floored at 1 (so a 4x1 image's level 2 is 1x1, not 1x0). Copying the base extent into
+// a smaller level would overrun it. A 3D texture's copy covers its whole depth, as a
+// 2D texture's covers one layer.
+func mipExtent(e *textureEntry, level uint32) (width, height, depth uint32) {
+	return max(e.width>>level, 1), max(e.height>>level, 1), max(e.depth>>level, 1)
 }
 
-// stageAccess maps an gpu.Stage bitmask to a coarse (stage, access) pair.
+// stageAccess maps an gpu.Stage bitmask to a coarse (stage, access) pair. Each stage
+// carries both the reads and the writes it can make, so the same pair serves as a
+// barrier's source and its destination: blending reads the color attachment, a depth
+// test reads depth, and a vertex or fragment shader can write storage.
 func stageAccess(s gpu.Stage) (C.VkPipelineStageFlags2, C.VkAccessFlags2) {
 	var stage C.VkPipelineStageFlags2
 	var access C.VkAccessFlags2
@@ -354,19 +343,19 @@ func stageAccess(s gpu.Stage) (C.VkPipelineStageFlags2, C.VkAccessFlags2) {
 	}
 	if s&gpu.StageVertex != 0 {
 		stage |= vkStageVertex
-		access |= vkAccessShaderRead
+		access |= vkAccessShaderRead | vkAccessShaderWrite
 	}
 	if s&gpu.StageFragment != 0 {
 		stage |= vkStageFragment
-		access |= vkAccessShaderRead
+		access |= vkAccessShaderRead | vkAccessShaderWrite
 	}
 	if s&gpu.StageColorOutput != 0 {
 		stage |= vkStageColor
-		access |= vkAccessColorWrite
+		access |= vkAccessColorRead | vkAccessColorWrite
 	}
 	if s&gpu.StageDepth != 0 {
 		stage |= vkStageEarlyDepth | vkStageLateDepth
-		access |= vkAccessDepthWrite
+		access |= vkAccessDepthRead | vkAccessDepthWrite
 	}
 	if s&gpu.StageCompute != 0 {
 		stage |= vkStageCompute

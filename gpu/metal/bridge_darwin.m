@@ -526,7 +526,7 @@ MBResult mbInit(void *backend) { MB_BEGIN(backend,0) {
   NSError *aerr=nil; b.allocator=[[b.device newCommandAllocatorWithDescriptor:ad error:&aerr] autorelease]; [ad release];
   require(b.allocator!=nil,aerr.localizedDescription ?: @"cannot create command allocator");
   b.buffer=[[b.device newCommandBuffer] autorelease]; require(b.buffer!=nil,@"cannot create command buffer");
-  MTL4ArgumentTableDescriptor *td=[MTL4ArgumentTableDescriptor new]; td.maxBufferBindCount=3;
+  MTL4ArgumentTableDescriptor *td=[MTL4ArgumentTableDescriptor new]; td.maxBufferBindCount=4;
   NSError *terr=nil; b.argTable=[[b.device newArgumentTableWithDescriptor:td error:&terr] autorelease]; [td release];
   require(b.argTable!=nil,terr.localizedDescription ?: @"cannot create argument table");
   b.textures=[[b.device newBufferWithLength:65536*8 options:MTLResourceStorageModeShared] autorelease];
@@ -535,6 +535,10 @@ MBResult mbInit(void *backend) { MB_BEGIN(backend,0) {
   enrol(b,b.textures); enrol(b,b.samplers);
   [b.argTable setAddress:b.textures.gpuAddress atIndex:1];
   [b.argTable setAddress:b.samplers.gpuAddress atIndex:2];
+  // Storage images (Vulkan's binding 1) read the same table as sampled ones: a Metal
+  // texture handle does not care how it is accessed, so a texture's one index serves
+  // both, as it does on Vulkan.
+  [b.argTable setAddress:b.textures.gpuAddress atIndex:3];
   b.textureSlots=[NSMutableIndexSet indexSetWithIndexesInRange:NSMakeRange(1,65535)];
   b.timestampScratch=[[b.device newBufferWithLength:4 options:MTLResourceStorageModeShared] autorelease];
   enrol(b,b.timestampScratch);

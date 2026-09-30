@@ -61,7 +61,7 @@ func TestBindlessTexture(t *testing.T) {
 	readback := b.Alloc(size*size*4, gpu.MemoryHost, "readback")
 	cmd := b.Begin()
 	cmd.CopyBufferToTexture(tex, 0, 0, staging, 0)
-	cmd.PrepareSampled(tex, gpu.StageFragment)
+	cmd.Barrier(gpu.StageTransfer, gpu.StageFragment, 0)
 	cmd.BeginRenderPass(gpu.RenderTargets{
 		Color: []gpu.ColorAttachment{{Texture: color, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 0, 1}}},
 	})
@@ -71,6 +71,7 @@ func TestBindlessTexture(t *testing.T) {
 	cmd.SetScissor(0, 0, size, size)
 	cmd.Draw(utils.ToBytes(&rootAddr), 6, 1, 0, 0)
 	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput, gpu.StageTransfer, 0)
 	cmd.CopyTextureToBuffer(readback, color, 0, 0)
 	f := b.Submit(cmd)
 	b.Wait(f)

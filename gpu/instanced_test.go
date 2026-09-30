@@ -137,6 +137,7 @@ func renderInstances(b gpu.Backend, size int, offsets [][3]float32, eye vec3) (p
 	cmd.SetScissor(0, 0, int32(size), int32(size))
 	cmd.DrawIndexedIndirect(utils.ToBytes(&rootAddr), idx, gpu.IndexUint32, indirect, 0, 1, 20)
 	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput, gpu.StageTransfer, 0)
 	cmd.CopyTextureToBuffer(readback, color, 0, 0)
 	f := b.Submit(cmd)
 	b.Wait(f)

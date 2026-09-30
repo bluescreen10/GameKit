@@ -12,9 +12,11 @@ import (
 )
 
 // Desired heap capacities (clamped to device update-after-bind limits at init).
+// Sampled and storage images share one index space — a texture that is both has one
+// index, written into both arrays — so the storage array is as large as the sampled.
 const (
 	wantSampledImages = 16384
-	wantStorageImages = 4096
+	wantStorageImages = wantSampledImages
 	wantSamplers      = 512
 )
 

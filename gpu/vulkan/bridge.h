@@ -56,8 +56,6 @@ VkPipelineStageFlags2 vkbStageCompute(void);
 
 VkPipelineStageFlags2 vkbStageTransfer(void);
 
-VkPipelineStageFlags2 vkbStageCopy(void);
-
 VkPipelineStageFlags2 vkbStageAll(void);
 
 VkAccessFlags2 vkbAccessNone(void);
@@ -67,6 +65,8 @@ VkAccessFlags2 vkbAccessIndirectRead(void);
 VkAccessFlags2 vkbAccessShaderRead(void);
 
 VkAccessFlags2 vkbAccessShaderWrite(void);
+
+VkAccessFlags2 vkbAccessColorRead(void);
 
 VkAccessFlags2 vkbAccessColorWrite(void);
 
@@ -92,24 +92,20 @@ void vkbBindHeap(VkCommandBuffer cb, VkPipelineLayout layout, VkDescriptorSet se
 
 VkResult vkbSubmit(VkDevice dev, VkQueue q, VkCommandBuffer cb, VkFence* outFence);
 
-void vkbImageBarrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect,
-                            VkImageLayout oldL, VkImageLayout newL,
-                            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-                            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
+void vkbInitializeImage(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect);
 
 void vkbGlobalBarrier(VkCommandBuffer cb, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                              VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
 
 void vkbBeginRendering(VkCommandBuffer cb, uint32_t w, uint32_t h,
                               const VkImageView* colors, const int* loads, const float* clears, uint32_t nColor,
-                              int hasDepth, VkImageView depth, int depthClear, float dclear,
-                              VkImageLayout depthLayout);
+                              int hasDepth, VkImageView depth, int depthClear, float dclear);
 
-void vkbCopyImageToBuffer(VkCommandBuffer cb, VkImage img, VkBuffer buf, uint32_t w, uint32_t h,
+void vkbCopyImageToBuffer(VkCommandBuffer cb, VkImage img, VkBuffer buf, uint32_t w, uint32_t h, uint32_t d,
                                  uint32_t mip, uint32_t layer, VkImageAspectFlags aspect);
 
 void vkbCopyBufferToImage(VkCommandBuffer cb, VkBuffer buf, uint64_t srcOffset, VkImage img,
-                                 uint32_t w, uint32_t h, uint32_t mip, uint32_t layer, VkImageAspectFlags aspect);
+                                 uint32_t w, uint32_t h, uint32_t d, uint32_t mip, uint32_t layer, VkImageAspectFlags aspect);
 
 void vkbPush(VkCommandBuffer cb, VkPipelineLayout layout, const void* data, uint32_t size);
 
@@ -158,18 +154,17 @@ VkResult vkbCreateSemaphore(VkDevice dev, VkSemaphore* out);
 
 VkResult vkbAcquire(VkDevice dev, VkSwapchainKHR swap, VkSemaphore sem, uint32_t* outIndex);
 
-void vkbPresentBarrier(VkCommandBuffer cb, VkImage img, VkImageLayout oldL);
+void vkbPresentBarrier(VkCommandBuffer cb, VkImage img);
 
 VkResult vkbSubmitPresent(VkQueue q, VkCommandBuffer cb, VkSwapchainKHR swap, uint32_t imageIndex,
                                  VkSemaphore acquire, VkSemaphore renderDone, VkFence fence);
 
 VkResult vkbCreateImage(VkDevice dev, VkPhysicalDevice phys,
-                               VkFormat fmt, uint32_t w, uint32_t h, uint32_t layers, uint32_t mips,
+                               VkFormat fmt, uint32_t w, uint32_t h, uint32_t depth, uint32_t layers, uint32_t mips,
                                VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageViewType viewType,
                                VkImage* outImg, VkDeviceMemory* outMem, VkImageView* outView);
 
-void vkbWriteSampledImage(VkDevice dev, VkDescriptorSet set, uint32_t index, VkImageView view,
-                                 VkImageLayout layout);
+void vkbWriteSampledImage(VkDevice dev, VkDescriptorSet set, uint32_t index, VkImageView view);
 
 void vkbWriteStorageImage(VkDevice dev, VkDescriptorSet set, uint32_t index, VkImageView view);
 

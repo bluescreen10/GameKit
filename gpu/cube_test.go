@@ -87,6 +87,7 @@ func TestCube(t *testing.T) {
 	cmd.SetScissor(0, 0, size, size)
 	cmd.DrawIndexed(utils.ToBytes(&rootAddr), ib, gpu.IndexUint32, uint32(len(indices)), 1, 0, 0, 0)
 	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput, gpu.StageTransfer, 0)
 	cmd.CopyTextureToBuffer(readback, color, 0, 0)
 	f := b.Submit(cmd)
 	b.Wait(f)
