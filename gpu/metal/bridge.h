@@ -53,9 +53,11 @@ typedef struct {
     uint32_t colorLoad[8];
     uint32_t colorStore[8];
     float colorClear[8][4];
+    uint64_t colorResolve[8];
     uint64_t depth;
     uint32_t depthLoad;
     uint32_t depthStore;
+    uint64_t depthResolve;
     uint32_t depthReadOnly;
     float depthClear;
 } MBRenderDesc;

@@ -468,17 +468,24 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 
 // vkbBeginRendering starts dynamic rendering with up to 4 color attachments (0 for a
 // depth-only pass, e.g. a shadow map; up to 4 for MRT, e.g. the G-buffer fill) and an
-// optional depth attachment. colors/loads/clears are parallel arrays of length nColor
-// (clears is nColor*4 floats, rgba per attachment). Every attachment is in
-// VK_IMAGE_LAYOUT_GENERAL, as every image is.
+// optional depth attachment. colors/colorResolves/loads/clears are parallel arrays of
+// length nColor (clears is nColor*4 floats, rgba per attachment). A non-null resolve
+// view receives its multisampled attachment's samples when the pass ends: averaged for
+// colour, sample zero's for depth, the one depth resolve every device supports. Every
+// attachment is in VK_IMAGE_LAYOUT_GENERAL, as every image is.
  void vkbBeginRendering(VkCommandBuffer cb, uint32_t w, uint32_t h,
-                              const VkImageView* colors, const int* loads, const float* clears, uint32_t nColor,
-                              int hasDepth, VkImageView depth, int depthClear, float dclear) {
+                              const VkImageView* colors, const VkImageView* colorResolves, const int* loads, const float* clears, uint32_t nColor,
+                              int hasDepth, VkImageView depth, VkImageView depthResolve, int depthClear, float dclear) {
     VkRenderingAttachmentInfo cis[4] = {0};
     for (uint32_t i = 0; i < nColor; i++) {
         cis[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         cis[i].imageView = colors[i];
         cis[i].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        if (colorResolves[i] != VK_NULL_HANDLE) {
+            cis[i].resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+            cis[i].resolveImageView = colorResolves[i];
+            cis[i].resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        }
         cis[i].loadOp = loads[i] ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         cis[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         cis[i].clearValue.color.float32[0] = clears[i * 4 + 0];
@@ -491,6 +498,11 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     di.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     di.imageView = depth;
     di.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    if (depthResolve != VK_NULL_HANDLE) {
+        di.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+        di.resolveImageView = depthResolve;
+        di.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
     di.loadOp = depthClear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
     di.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     di.clearValue.depthStencil.depth = dclear;
@@ -975,7 +987,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 // vkbCreateImage creates an image + dedicated device-local memory + a default
 // view. usage is a VkImageUsageFlags mask assembled on the Go side.
  VkResult vkbCreateImage(VkDevice dev, VkPhysicalDevice phys,
-                               VkFormat fmt, uint32_t w, uint32_t h, uint32_t depth, uint32_t layers, uint32_t mips,
+                               VkFormat fmt, uint32_t w, uint32_t h, uint32_t depth, uint32_t layers, uint32_t mips, uint32_t samples,
                                VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImageViewType viewType,
                                VkImage* outImg, VkDeviceMemory* outMem, VkImageView* outView) {
     VkImageCreateInfo ci = {0};
@@ -985,7 +997,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     ci.extent.width = w; ci.extent.height = h; ci.extent.depth = depth;
     ci.mipLevels = mips;
     ci.arrayLayers = layers;
-    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.samples = samples < 2 ? VK_SAMPLE_COUNT_1_BIT : (VkSampleCountFlagBits)samples;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     ci.usage = usage;
     ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;

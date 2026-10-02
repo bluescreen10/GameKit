@@ -429,6 +429,7 @@ func (c *command) BeginRenderPass(r gpu.RenderTargets) {
 		d.color[i] = C.uint64_t(x.Texture.H)
 		d.colorLoad[i] = C.uint32_t(x.Load)
 		d.colorStore[i] = C.uint32_t(x.Store)
+		d.colorResolve[i] = C.uint64_t(x.ResolveTexture.H)
 		for j, v := range x.Clear {
 			d.colorClear[i][j] = C.float(v)
 		}
@@ -438,6 +439,7 @@ func (c *command) BeginRenderPass(r gpu.RenderTargets) {
 		d.depth = C.uint64_t(x.Texture.H)
 		d.depthLoad = C.uint32_t(x.Load)
 		d.depthStore = C.uint32_t(x.Store)
+		d.depthResolve = C.uint64_t(x.ResolveTexture.H)
 		d.depthReadOnly = C.uint32_t(flag(x.ReadOnly))
 		d.depthClear = C.float(x.Clear)
 	}

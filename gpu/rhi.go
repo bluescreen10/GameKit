@@ -414,8 +414,12 @@ type TextureDescriptor struct {
 	Mips          uint32 // 0 => 1
 	Format        Format
 	Usage         TextureUsage
-	Samples       uint8 // MSAA; 0/1 => 1
-	Label         string
+	// Samples is how many samples each pixel holds (MSAA); 0 and 1 both mean one. A
+	// multisampled texture is a 2D render target or depth buffer with one mip. It cannot
+	// be sampled or copied: a render pass resolves it into a single-sample texture (see
+	// ColorAttachment.ResolveTexture), and that is what gets read.
+	Samples uint8
+	Label   string
 }
 
 // SamplerDescriptor describes a bindless sampler.
@@ -488,7 +492,9 @@ type PipelineDescriptor struct {
 	Topology     Topology
 	ColorFormats []Format // dynamic-rendering color attachment formats
 	DepthFormat  Format   // FormatUndefined => no depth
-	Samples      uint8
+	// Samples must match the sample count of the attachments the pipeline draws into;
+	// 0 and 1 both mean one.
+	Samples uint8
 
 	CullMode     CullMode
 	FrontFaceCW  bool // front face is clockwise (vs the default counter-clockwise)
@@ -517,6 +523,13 @@ type ColorAttachment struct {
 	Load    LoadOp
 	Store   StoreOp
 	Clear   [4]float32
+	// ResolveTexture, when valid, receives the average of each pixel's samples at the end
+	// of the pass. Texture must then be multisampled, ResolveTexture a single-sample
+	// texture of the same size and format, and Store StoreDontCare: the resolve is the
+	// samples' last use. Metal does not reliably resolve samples it also stores — with a
+	// second attachment in the pass, an M-series GPU left the resolve texture unwritten
+	// in 39 of 40 frames — so no backend accepts it.
+	ResolveTexture Texture
 }
 
 type DepthAttachment struct {
@@ -524,6 +537,11 @@ type DepthAttachment struct {
 	Load    LoadOp
 	Store   StoreOp
 	Clear   float32
+	// ResolveTexture, when valid, receives one depth per pixel at the end of the pass:
+	// sample zero's, the one resolve every device supports. As for a colour attachment,
+	// Texture must then be multisampled, ResolveTexture a single-sample texture of the
+	// same size and format, and Store StoreDontCare.
+	ResolveTexture Texture
 	// ReadOnly binds the depth buffer for testing only (no writes), so the same image
 	// may be sampled from the bindless heap during the pass. A pipeline used with it
 	// must have DepthWrite false.
@@ -551,8 +569,10 @@ type Backend interface {
 	// Bindless resources.
 	CreateTexture(TextureDescriptor) Texture
 	DestroyTexture(Texture)
-	// TextureView registers an additional sampled view (e.g. a single array
-	// layer / mip) into the heap and returns its index.
+	// TextureView registers an additional view (e.g. a single array layer / mip) into
+	// the heap and returns its index. It is sampled; a view of exactly one mip of a
+	// texture with TextureStorage usage can be written too, at the same index — which
+	// is how a compute shader writes one level of a mip chain.
 	TextureView(t Texture, kind TextureKind, baseMip, mipCount, baseLayer, layerCount uint32) Texture
 	CreateSampler(SamplerDescriptor) Sampler
 	DestroySampler(Sampler)

@@ -93,7 +93,7 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	var mem C.VkDeviceMemory
 	var view C.VkImageView
 	r := C.vkbCreateImage(b.device, b.physicalDevice, vkFormat(d.Format),
-		C.uint32_t(d.Width), C.uint32_t(d.Height), C.uint32_t(depth), C.uint32_t(layers), C.uint32_t(mips),
+		C.uint32_t(d.Width), C.uint32_t(d.Height), C.uint32_t(depth), C.uint32_t(layers), C.uint32_t(mips), C.uint32_t(d.Samples),
 		imageUsage(d.Usage, isDepth), aspect, viewType(d.Kind),
 		&img, &mem, &view)
 	if r != C.VK_SUCCESS {

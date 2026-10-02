@@ -701,19 +701,30 @@ MBResult mbWaitIdle(void *backend) { MB_BEGIN(backend,0) {
  } MB_END
 }
 
+// storeAction is what ending a pass does with an attachment: keep it or not, or average
+// its samples into resolve. Resolving never keeps the samples too (see
+// gpu.ColorAttachment.ResolveTexture). It is applied only when the pass ends (see
+// mbEndRenderPass); an encoder split off mid-pass stores plainly instead.
+static MTLStoreAction storeAction(uint32_t store,id<MTLTexture> resolve) {
+ if(resolve) { require(!store,@"a resolved attachment cannot also store its samples"); return MTLStoreActionMultisampleResolve; }
+ return store?MTLStoreActionStore:MTLStoreActionDontCare;
+}
 MBResult mbBeginRenderPass(void *backend,uint64_t command,const MBRenderDesc *v) { MB_BEGIN(backend,command) {
   require(!c.render,@"nested render pass"); endCompute(b,c); require(v && v->colorCount<=8,@"invalid render pass");
   c.pass=[MTL4RenderPassDescriptor new];
   for(NSUInteger i=0;i<v->colorCount;i++) {
    id<MTLTexture> t=resource(b,v->color[i],2).object; MTLRenderPassColorAttachmentDescriptor *d=c.pass.colorAttachments[i];
    d.texture=t; d.loadAction=v->colorLoad[i]==1?MTLLoadActionClear:v->colorLoad[i]==2?MTLLoadActionLoad:MTLLoadActionDontCare;
-   d.storeAction=v->colorStore[i]?MTLStoreActionStore:MTLStoreActionDontCare;
+   if(v->colorResolve[i]) d.resolveTexture=resource(b,v->colorResolve[i],2).object;
+   d.storeAction=storeAction(v->colorStore[i],d.resolveTexture);
    d.clearColor=MTLClearColorMake(v->colorClear[i][0],v->colorClear[i][1],v->colorClear[i][2],v->colorClear[i][3]);
   }
   if(v->depth) {
    id<MTLTexture> t=resource(b,v->depth,2).object; MTLRenderPassDepthAttachmentDescriptor *d=c.pass.depthAttachment;
    d.texture=t; d.loadAction=v->depthLoad==1?MTLLoadActionClear:v->depthLoad==2?MTLLoadActionLoad:MTLLoadActionDontCare;
-   d.storeAction=v->depthStore?MTLStoreActionStore:MTLStoreActionDontCare; d.clearDepth=v->depthClear; c.readOnlyDepth=v->depthReadOnly;
+   if(v->depthResolve) { d.resolveTexture=resource(b,v->depthResolve,2).object; d.depthResolveFilter=MTLMultisampleDepthResolveFilterSample0; }
+   d.storeAction=storeAction(v->depthStore,d.resolveTexture);
+   d.clearDepth=v->depthClear; c.readOnlyDepth=v->depthReadOnly;
   }
   prepareWork(b,c); resumeRender(b,c,NO);
   return mbSuccess(0,0);
