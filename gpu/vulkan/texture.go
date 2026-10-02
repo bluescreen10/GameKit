@@ -25,6 +25,9 @@ type textureEntry struct {
 	// texture.
 	width, height, depth uint32
 	isDepthFormat        bool
+	// writable says the image has storage usage, so a view of one of its mips can be
+	// written as a storage image.
+	writable bool
 	// swapchain-owned backbuffers set owned=false so Destroy skips image/mem.
 	owned bool
 }
@@ -100,7 +103,8 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	h := b.nextID.Add(1)
 	b.textures[h] = &textureEntry{
 		img: img, mem: mem, view: view, format: vkFormat(d.Format),
-		width: d.Width, height: d.Height, depth: depth, isDepthFormat: isDepth, owned: true,
+		width: d.Width, height: d.Height, depth: depth, isDepthFormat: isDepth,
+		writable: d.Usage&gpu.TextureStorage != 0, owned: true,
 	}
 	b.uninitialized = append(b.uninitialized, h)
 
@@ -164,8 +168,17 @@ func (b *Backend) TextureView(t gpu.Texture, kind gpu.TextureKind, baseMip, mipC
 		view: view, format: src.format, width: src.width, height: src.height, depth: src.depth,
 		isDepthFormat: src.isDepthFormat, owned: false,
 	}
-	tex := gpu.Texture{H: gpu.Handle(h), Index: b.nextTextureIndex(gpu.TextureSampled)}
+	// A storage descriptor names a single mip, so only a one-mip view of a writable
+	// image can be written; it gets the same index in both arrays, as a texture does.
+	usage := gpu.TextureSampled
+	if src.writable && mipCount == 1 {
+		usage |= gpu.TextureStorage
+	}
+	tex := gpu.Texture{H: gpu.Handle(h), Index: b.nextTextureIndex(usage)}
 	C.vkbWriteSampledImage(b.device, b.descSet, C.uint32_t(tex.Index), view)
+	if usage&gpu.TextureStorage != 0 {
+		C.vkbWriteStorageImage(b.device, b.descSet, C.uint32_t(tex.Index), view)
+	}
 	return tex
 }
 
