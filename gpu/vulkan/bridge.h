@@ -122,7 +122,7 @@ VkResult vkbCreateComputePipeline(VkDevice dev, VkPipelineLayout layout,
 VkResult vkbCreateCreateGraphicsPipeline(VkDevice dev, VkPipelineLayout layout,
         const void* vs, size_t vsBytes, const void* fs, size_t fsBytes, const char* entry,
         VkPrimitiveTopology topo, const VkFormat* colorFmts, uint32_t nColor,
-        VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, int blendMode,
+        VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, const VkPipelineColorBlendAttachmentState* blends,
         int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples, VkPipeline* out);
 
 VkQueryPool vkbCreateTimestampPool(VkDevice dev, uint32_t count);
@@ -138,10 +138,11 @@ void vkbCmdResetQueryPool(VkCommandBuffer cb, VkQueryPool pool, uint32_t count);
 void vkbCmdWriteTimestamp(VkCommandBuffer cb, VkPipelineStageFlags2 stage, VkQueryPool pool, uint32_t index);
 
 VkSurfaceKHR vkbSurfaceFromHandle(uint64_t h);
+uint64_t vkbSurfaceHandle(VkSurfaceKHR surface);
 
 uint32_t vkbSurfaceFormats(VkPhysicalDevice phys, VkSurfaceKHR surface, VkFormat* out, uint32_t max);
 VkResult vkbCreateSwapchain(VkPhysicalDevice phys, VkDevice dev, VkSurfaceKHR surface,
-                                   uint32_t w, uint32_t h, VkFormat format, VkSwapchainKHR old,
+                                   uint32_t w, uint32_t h, VkFormat format, VkPresentModeKHR presentMode, VkSwapchainKHR old,
                                    VkSwapchainKHR* outSwap, uint32_t* outW, uint32_t* outH);
 
 uint32_t vkbSwapchainImageCount(VkDevice dev, VkSwapchainKHR swap);
@@ -174,9 +175,9 @@ VkResult vkbCreateSubView(VkDevice dev, VkImage img, VkFormat fmt, VkImageAspect
 
 void vkbDestroyImage(VkDevice dev, VkImage img, VkDeviceMemory mem, VkImageView view);
 
-VkResult vkbCreateMetalSurface(VkInstance inst, void* layer, VkSurfaceKHR* out);
+VkResult vkbCreateMetalSurface(VkInstance inst, uintptr_t layer, VkSurfaceKHR* out);
 
-VkResult vkbCreateXlibSurface(VkInstance inst, void* display, uint64_t window, VkSurfaceKHR* out);
+VkResult vkbCreateXlibSurface(VkInstance inst, uintptr_t display, uint64_t window, VkSurfaceKHR* out);
 
 VkResult vkbCreateWin32Surface(VkInstance inst, uintptr_t window, VkSurfaceKHR* out);
 

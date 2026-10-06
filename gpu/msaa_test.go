@@ -196,3 +196,84 @@ func TestMultisampleResolveInLaterPass(t *testing.T) {
 		}
 	}
 }
+
+// readSamplesData matches PC in read_samples.comp.
+type readSamplesData struct {
+	samples           uint64
+	color, depth      uint32
+	size, sampleCount uint32
+}
+
+// TestMultisampledTexturesReadPerSample draws a white triangle at depth 0 into a 4x
+// colour target and depth buffer cleared to black and 1, then reads every sample back
+// through the sampled heap from a compute shader. Each sample must hold what was drawn
+// at it: white with depth 0 under the triangle, black with depth 1 outside, and the
+// pixels its edges cross must hold some of each — which only individual samples can
+// show, since a resolve would average them.
+func TestMultisampledTexturesReadPerSample(t *testing.T) {
+	b := testBackend(t)
+
+	color := b.CreateTexture(gpu.TextureDescriptor{
+		Kind: gpu.Texture2D, Width: msaaSize, Height: msaaSize, Format: gpu.FormatRGBA8Unorm,
+		Usage: gpu.TextureRenderTarget | gpu.TextureSampled, Samples: msaaSamples, Label: "msaa-color",
+	})
+	depth := b.CreateTexture(gpu.TextureDescriptor{
+		Kind: gpu.Texture2D, Width: msaaSize, Height: msaaSize, Format: gpu.FormatDepth32F,
+		Usage: gpu.TextureDepth | gpu.TextureSampled, Samples: msaaSamples, Label: "msaa-depth",
+	})
+	pipeline := b.CreateGraphicsPipeline(gpu.PipelineDescriptor{
+		VertexShader: triangleVert, FragmentShader: triangleFrag,
+		Topology: gpu.TopologyTriangles, ColorFormats: []gpu.Format{gpu.FormatRGBA8Unorm},
+		DepthFormat: gpu.FormatDepth32F, DepthTest: true, DepthWrite: true, DepthCompare: gpu.CompareAlways,
+		Samples: msaaSamples, CullMode: gpu.CullNone, Label: "msaa-depth-triangle",
+	})
+	reader := b.CreateComputePipeline(gpu.ComputePipelineDescriptor{Shader: readSamples, Label: "read-samples"})
+	rootAddr := whiteTriangleRoot(b)
+	const sampleBytes = 8
+	samples := b.Alloc(msaaSize*msaaSize*msaaSamples*sampleBytes, gpu.MemoryHost, "samples")
+
+	cmd := b.Begin()
+	cmd.BeginRenderPass(gpu.RenderTargets{
+		Color: []gpu.ColorAttachment{{Texture: color, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: [4]float32{0, 0, 0, 1}}},
+		Depth: &gpu.DepthAttachment{Texture: depth, Load: gpu.LoadClear, Store: gpu.StoreKeep, Clear: 1},
+	})
+	cmd.SetPipeline(pipeline)
+	cmd.SetViewport(0, 0, msaaSize, msaaSize, 0, 1)
+	cmd.SetScissor(0, 0, msaaSize, msaaSize)
+	cmd.Draw(utils.ToBytes(&rootAddr), 3, 1, 0, 0)
+	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput|gpu.StageDepth, gpu.StageCompute, 0)
+	cmd.SetPipeline(reader)
+	data := readSamplesData{samples: samples.Addr, color: color.Index, depth: depth.Index, size: msaaSize, sampleCount: msaaSamples}
+	cmd.Dispatch(utils.ToBytes(&data), msaaSize/8, msaaSize/8, 1)
+	cmd.Barrier(gpu.StageCompute, gpu.StageAll, 0)
+	b.Wait(b.Submit(cmd))
+
+	values := unsafe.Slice((*[2]float32)(samples.Ptr), msaaSize*msaaSize*msaaSamples)
+	var partial int
+	for pixel := 0; pixel < msaaSize*msaaSize; pixel++ {
+		var covered int
+		for s := 0; s < msaaSamples; s++ {
+			red, z := values[pixel*msaaSamples+s][0], values[pixel*msaaSamples+s][1]
+			switch {
+			case red == 1 && z == 0:
+				covered++
+			case red == 0 && z == 1:
+			default:
+				t.Fatalf("pixel %d sample %d = red %v, depth %v; want white at depth 0 or black at depth 1", pixel, s, red, z)
+			}
+		}
+		if covered > 0 && covered < msaaSamples {
+			partial++
+		}
+	}
+	corner := values[(1*msaaSize+msaaSize-2)*msaaSamples]
+	middle := values[(msaaSize/2*msaaSize+msaaSize/2-4)*msaaSamples]
+	if corner != [2]float32{0, 1} || middle != [2]float32{1, 0} {
+		t.Fatalf("empty corner = %v, triangle middle = %v; want [0 1] and [1 0]", corner, middle)
+	}
+	if partial == 0 {
+		t.Fatal("no pixel holds both covered and uncovered samples, want the triangle's edges to cross some")
+	}
+	t.Logf("%d pixels hold both covered and uncovered samples", partial)
+}

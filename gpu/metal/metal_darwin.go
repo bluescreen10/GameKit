@@ -327,19 +327,8 @@ func (b *Backend) WaitIdle() {
 	result(C.mbWaitIdle(b.native))
 }
 
-// CocoaMetalLayer installs and returns a CAMetalLayer on a Cocoa NSWindow. It is
-// shared with the Vulkan macOS surface path so only one cgo package needs to
-// compile Objective-C and link the Objective-C runtime.
-func CocoaMetalLayer(window unsafe.Pointer) uintptr {
-	return uintptr(result(C.mbCreateMetalSurface(window)))
-}
-
-func (b *Backend) CreateMetalSurface(window unsafe.Pointer) uintptr {
-	return CocoaMetalLayer(window)
-}
-
-// CreateSwapchain takes a CAMetalLayer pointer, e.g. from CreateMetalSurface.
-func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
+// CreateSwapchain creates a presentation chain for a CAMetalLayer surface.
+func (b *Backend) CreateSwapchain(surface gpu.Surface, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
 	format := desc.Format
 	if format == gpu.FormatUndefined {
 		format = gpu.FormatBGRA8Unorm
@@ -348,6 +337,7 @@ func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor)
 		return gpu.Swapchain{}, fmt.Errorf("metal: swapchain format %v is not one a CAMetalLayer presents", format)
 	}
 	sc := gpu.Swapchain{H: gpu.Handle(result(C.mbCreateSwapchain(b.native, C.uintptr_t(surface), C.uint32_t(desc.Width), C.uint32_t(desc.Height), C.uint32_t(format))))}
+	b.setDisplaySync(sc, desc.PresentMode)
 
 	b.swapchainMu.Lock()
 	defer b.swapchainMu.Unlock()
@@ -362,13 +352,29 @@ func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor)
 var layerFormats = []gpu.Format{gpu.FormatBGRA8Unorm, gpu.FormatBGRA8Srgb, gpu.FormatRGBA16F, gpu.FormatRGB10A2Unorm}
 
 // SwapchainFormats is the same for every surface: whatever a CAMetalLayer presents.
-func (b *Backend) SwapchainFormats(surface uintptr) []gpu.Format {
+func (b *Backend) SwapchainFormats(surface gpu.Surface) []gpu.Format {
 	return slices.Clone(layerFormats)
 }
 
 func (b *Backend) ResizeSwapchain(s gpu.Swapchain, w, h uint32) {
 	b.WaitIdle()
 	result(C.mbResizeSwapchain(b.native, C.uint64_t(s.H), C.uint32_t(w), C.uint32_t(h)))
+}
+
+// SetPresentMode switches the layer's display sync. A CAMetalLayer without it presents
+// as soon as it can, which is PresentImmediate; it has no mailbox, so PresentMailbox
+// keeps display sync, as PresentVSync does.
+func (b *Backend) SetPresentMode(s gpu.Swapchain, mode gpu.PresentMode) {
+	b.WaitIdle()
+	b.setDisplaySync(s, mode)
+}
+
+func (b *Backend) setDisplaySync(s gpu.Swapchain, mode gpu.PresentMode) {
+	enabled := C.int(1)
+	if mode == gpu.PresentImmediate {
+		enabled = 0
+	}
+	result(C.mbSetDisplaySync(b.native, C.uint64_t(s.H), enabled))
 }
 
 func (b *Backend) SwapchainSize(s gpu.Swapchain) (uint32, uint32) {

@@ -270,3 +270,25 @@ func TestSwapchainFormatIsTheOneAskedFor(t *testing.T) {
 		t.Error("CreateSwapchain(FormatR8Unorm) succeeded, want an error: the surface does not list it")
 	}
 }
+
+func TestSwapchainKeepsItsPresentMode(t *testing.T) {
+	b := newBackend(t)
+
+	sc, err := b.CreateSwapchain(0, gpu.SwapchainDescriptor{Width: 8, Height: 8, PresentMode: gpu.PresentImmediate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.PresentMode(sc); got != gpu.PresentImmediate {
+		t.Errorf("PresentMode() = %v after creating with PresentImmediate, want PresentImmediate", got)
+	}
+	b.ResizeSwapchain(sc, 16, 16)
+	if got := b.PresentMode(sc); got != gpu.PresentImmediate {
+		t.Errorf("PresentMode() = %v after a resize, want the PresentImmediate it was created with", got)
+	}
+	for _, mode := range []gpu.PresentMode{gpu.PresentMailbox, gpu.PresentVSync} {
+		b.SetPresentMode(sc, mode)
+		if got := b.PresentMode(sc); got != mode {
+			t.Errorf("PresentMode() = %v after SetPresentMode(%v), want %v", got, mode, mode)
+		}
+	}
+}

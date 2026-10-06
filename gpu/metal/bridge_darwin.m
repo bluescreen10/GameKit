@@ -840,14 +840,6 @@ MBResult mbCopyTextureToBuffer(void *backend,uint64_t command,uint64_t buffer,ui
  } MB_END
 }
 
-MBResult mbCreateMetalSurface(void *window) { MB_BEGIN(nil,0) {
-  require([NSThread isMainThread],@"CreateMetalSurface must run on the main thread"); NSWindow *w=(NSWindow*)window; require(w!=nil,@"nil NSWindow");
-  NSView *v=w.contentView; if(![v.layer isKindOfClass:CAMetalLayer.class]) {v.wantsLayer=YES; v.layer=[CAMetalLayer layer];}
-  CAMetalLayer *layer=(CAMetalLayer*)v.layer; CGFloat scale=w.backingScaleFactor; CGSize points=v.bounds.size;
-  layer.contentsScale=scale; layer.drawableSize=CGSizeMake(points.width*scale,points.height*scale); return mbSuccess((uintptr_t)layer,0);
- } MB_END
-}
-
 MBResult mbCreateSwapchain(void *backend,uintptr_t surface,uint32_t width,uint32_t height,uint32_t pixelFormat) { MB_BEGIN(backend,0) {
   CAMetalLayer *layer=(CAMetalLayer*)surface; require([layer isKindOfClass:CAMetalLayer.class],@"surface must be a CAMetalLayer");
   layer.device=b.device; layer.pixelFormat=format(pixelFormat); layer.framebufferOnly=NO; layer.drawableSize=CGSizeMake(width,height); return mbSuccess(add(b,layer,6),0);
@@ -855,6 +847,10 @@ MBResult mbCreateSwapchain(void *backend,uintptr_t surface,uint32_t width,uint32
 }
 MBResult mbResizeSwapchain(void *backend,uint64_t swapchain,uint32_t width,uint32_t height) { MB_BEGIN(backend,0) {
   MBResource *r=resource(b,swapchain,6); require(!r.auxiliary,@"cannot resize with an acquired drawable"); ((CAMetalLayer*)r.object).drawableSize=CGSizeMake(width,height); return mbSuccess(0,0);
+ } MB_END
+}
+MBResult mbSetDisplaySync(void *backend,uint64_t swapchain,int enabled) { MB_BEGIN(backend,0) {
+  ((CAMetalLayer*)resource(b,swapchain,6).object).displaySyncEnabled=enabled!=0; return mbSuccess(0,0);
  } MB_END
 }
 MBResult mbSwapchainSize(void *backend,uint64_t swapchain) { MB_BEGIN(backend,0) {

@@ -83,15 +83,20 @@ func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline 
 	if samples == 0 {
 		samples = 1
 	}
-	// blendMode: 0 opaque, 1 src-alpha over, 2 additive (from the first target's
-	// color op destination factor).
-	blendMode := C.int(0)
-	if len(d.Blend) > 0 && d.Blend[0].Enable {
-		if d.Blend[0].ColorOp.Dst == gpu.BlendOne {
-			blendMode = 2
-		} else {
-			blendMode = 1
+	// One blend state per colour attachment; a target the descriptor gives none is
+	// opaque. A nil pointer when there are no targets keeps cgo from indexing an empty
+	// slice.
+	blends := make([]C.VkPipelineColorBlendAttachmentState, len(d.ColorFormats))
+	for i := range blends {
+		var blend gpu.BlendState
+		if i < len(d.Blend) {
+			blend = d.Blend[i]
 		}
+		blends[i] = blendAttachment(blend)
+	}
+	var blendsPtr *C.VkPipelineColorBlendAttachmentState
+	if len(blends) > 0 {
+		blendsPtr = &blends[0]
 	}
 
 	frontFaceCW := C.int(0)
@@ -111,12 +116,65 @@ func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline 
 		unsafe.Pointer(&d.VertexShader[0]), C.size_t(len(d.VertexShader)),
 		fragPtr, C.size_t(len(d.FragmentShader)), cEntry,
 		topology(d.Topology), colorPtr, C.uint32_t(len(d.ColorFormats)),
-		vkFormat(d.DepthFormat), cullMode(d.CullMode), frontFaceCW, blendMode,
+		vkFormat(d.DepthFormat), cullMode(d.CullMode), frontFaceCW, blendsPtr,
 		depthTest, depthWrite, compareOp(d.DepthCompare), C.uint32_t(samples), &p)
 	if r != C.VK_SUCCESS {
 		panic(fmt.Sprintf("vulkan: CreateGraphicsPipeline(%q) failed (%d)", d.Label, int(r)))
 	}
 	return b.registerPipeline(p, C.VK_PIPELINE_BIND_POINT_GRAPHICS)
+}
+
+// blendAttachment translates a target's blend state. WriteMask 0 means every channel,
+// whether or not blending is enabled.
+func blendAttachment(b gpu.BlendState) C.VkPipelineColorBlendAttachmentState {
+	mask := C.VkColorComponentFlags(b.WriteMask & 0xf)
+	if mask == 0 {
+		mask = C.VK_COLOR_COMPONENT_R_BIT | C.VK_COLOR_COMPONENT_G_BIT | C.VK_COLOR_COMPONENT_B_BIT | C.VK_COLOR_COMPONENT_A_BIT
+	}
+	state := C.VkPipelineColorBlendAttachmentState{colorWriteMask: mask}
+	if !b.Enable {
+		return state
+	}
+	state.blendEnable = C.VK_TRUE
+	state.srcColorBlendFactor = blendFactor(b.ColorOp.Src)
+	state.dstColorBlendFactor = blendFactor(b.ColorOp.Dst)
+	state.colorBlendOp = blendOp(b.ColorOp.Op)
+	state.srcAlphaBlendFactor = blendFactor(b.AlphaOp.Src)
+	state.dstAlphaBlendFactor = blendFactor(b.AlphaOp.Dst)
+	state.alphaBlendOp = blendOp(b.AlphaOp.Op)
+	return state
+}
+
+func blendFactor(f gpu.BlendFactor) C.VkBlendFactor {
+	switch f {
+	case gpu.BlendOne:
+		return C.VK_BLEND_FACTOR_ONE
+	case gpu.BlendSrcAlpha:
+		return C.VK_BLEND_FACTOR_SRC_ALPHA
+	case gpu.BlendOneMinusSrcAlpha:
+		return C.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+	case gpu.BlendDstAlpha:
+		return C.VK_BLEND_FACTOR_DST_ALPHA
+	case gpu.BlendOneMinusDstAlpha:
+		return C.VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA
+	default:
+		return C.VK_BLEND_FACTOR_ZERO
+	}
+}
+
+func blendOp(op gpu.BlendOp) C.VkBlendOp {
+	switch op {
+	case gpu.BlendSubtract:
+		return C.VK_BLEND_OP_SUBTRACT
+	case gpu.BlendReverseSubtract:
+		return C.VK_BLEND_OP_REVERSE_SUBTRACT
+	case gpu.BlendMin:
+		return C.VK_BLEND_OP_MIN
+	case gpu.BlendMax:
+		return C.VK_BLEND_OP_MAX
+	default:
+		return C.VK_BLEND_OP_ADD
+	}
 }
 
 // pipelineEntry records a pipeline and the bind point it was created for, so

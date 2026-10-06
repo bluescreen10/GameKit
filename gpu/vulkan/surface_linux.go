@@ -8,15 +8,28 @@ package vulkan
 import "C"
 
 import (
+	"errors"
 	"fmt"
-	"unsafe"
+
+	"github.com/bluescreen10/gamekit/gpu"
 )
 
-// CreateXlibSurface creates a Vulkan surface for an X11 Display and Window.
-func (b *Backend) CreateXlibSurface(display unsafe.Pointer, window uintptr) uintptr {
-	var surface C.VkSurfaceKHR
-	if result := C.vkbCreateXlibSurface(b.instance, display, C.uint64_t(window), &surface); result != C.VK_SUCCESS {
-		panic(fmt.Sprintf("vulkan: vkCreateXlibSurfaceKHR failed (%d)", int(result)))
+// CreateSurface creates a Vulkan Xlib surface for a native target.
+func (b *Backend) CreateSurface(target gpu.SurfaceTarget) (gpu.Surface, error) {
+	if target == nil {
+		return 0, errors.New("vulkan: nil surface target")
 	}
-	return uintptr(unsafe.Pointer(surface))
+	native := target.NativeSurface()
+	if native.Kind != gpu.NativeSurfaceXlibWindow {
+		return 0, fmt.Errorf("vulkan: unsupported native surface kind %d", native.Kind)
+	}
+	if native.Display == 0 || native.Handle == 0 {
+		return 0, errors.New("vulkan: surface target is closed or invalid")
+	}
+	var surface C.VkSurfaceKHR
+	result := C.vkbCreateXlibSurface(b.instance, C.uintptr_t(native.Display), C.uint64_t(native.Handle), &surface)
+	if result != C.VK_SUCCESS {
+		return 0, fmt.Errorf("vulkan: vkCreateXlibSurfaceKHR failed (%d)", int(result))
+	}
+	return gpu.Surface(C.vkbSurfaceHandle(surface)), nil
 }

@@ -50,7 +50,7 @@ func TestNativeWindowAndVulkanSurface(t *testing.T) {
 		t.Fatalf("initialize Vulkan: %v", err)
 	}
 	defer backend.Destroy()
-	surface, err := window.CreateSurface(backend)
+	surface, err := backend.CreateSurface(window)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -47,6 +47,10 @@ var (
 	storageWrite3D []byte
 	//go:embed testdata/sampled3d.frag.spv
 	sampled3DFrag []byte
+	//go:embed testdata/read_samples.comp.spv
+	readSamples []byte
+	//go:embed testdata/tint.frag.spv
+	tintFrag []byte
 )
 
 var (
@@ -86,6 +90,8 @@ func testBackend(t *testing.T) gpu.Backend {
 			storageWrite = variant("storage_write.comp")
 			storageWrite3D = variant("storage_write3d.comp")
 			sampled3DFrag = variant("sampled3d.frag")
+			readSamples = variant("read_samples.comp")
+			tintFrag = variant("tint.frag")
 		}
 		backendErr = backendInst.Init()
 	})

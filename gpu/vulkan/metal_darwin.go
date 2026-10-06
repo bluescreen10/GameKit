@@ -9,9 +9,10 @@ package vulkan
 import "C"
 
 import (
+	"errors"
 	"fmt"
-	"unsafe"
 
+	"github.com/bluescreen10/gamekit/gpu"
 	"github.com/bluescreen10/gamekit/gpu/metal"
 )
 
@@ -19,15 +20,29 @@ import (
 // pass them to New when creating an on-screen backend on macOS.
 var MetalSurfaceExtensions = []string{"VK_KHR_surface", "VK_EXT_metal_surface"}
 
-// CreateMetalSurface makes a VkSurfaceKHR from a Cocoa NSWindow, returning it as
-// a uintptr for CreateSwapchain. The
-// window's content view is made CAMetalLayer-backed. Instance must have been
-// created with MetalSurfaceExtensions.
-func (b *Backend) CreateMetalSurface(nsWindow unsafe.Pointer) uintptr {
-	var surf C.VkSurfaceKHR
-	layer := metal.CocoaMetalLayer(nsWindow)
-	if r := C.vkbCreateMetalSurface(b.instance, unsafe.Pointer(layer), &surf); r != C.VK_SUCCESS {
-		panic(fmt.Sprintf("vulkan: vkCreateMetalSurfaceEXT failed (%d)", int(r)))
+// CreateSurface creates a Vulkan Metal surface for a Cocoa window or view.
+// The Vulkan instance must have been created with MetalSurfaceExtensions.
+func (b *Backend) CreateSurface(target gpu.SurfaceTarget) (gpu.Surface, error) {
+	if target == nil {
+		return 0, errors.New("vulkan: nil surface target")
 	}
-	return uintptr(unsafe.Pointer(surf))
+	native := target.NativeSurface()
+	var layer uintptr
+	switch native.Kind {
+	case gpu.NativeSurfaceCocoaWindow:
+		layer = metal.CocoaWindowMetalLayer(native.Handle)
+	case gpu.NativeSurfaceCocoaView:
+		layer = metal.CocoaViewMetalLayer(native.Handle)
+	default:
+		return 0, fmt.Errorf("vulkan: unsupported native surface kind %d", native.Kind)
+	}
+	if layer == 0 {
+		return 0, errors.New("vulkan: surface target is closed or invalid")
+	}
+	var surface C.VkSurfaceKHR
+	result := C.vkbCreateMetalSurface(b.instance, C.uintptr_t(layer), &surface)
+	if result != C.VK_SUCCESS {
+		return 0, fmt.Errorf("vulkan: vkCreateMetalSurfaceEXT failed (%d)", int(result))
+	}
+	return gpu.Surface(C.vkbSurfaceHandle(surface)), nil
 }

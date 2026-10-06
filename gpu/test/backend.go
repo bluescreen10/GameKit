@@ -17,6 +17,7 @@
 package test
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -223,6 +224,7 @@ func (b *Backend) DestroyPipeline(p gpu.Pipeline) {
 type swapchainState struct {
 	width, height uint32
 	format        gpu.Format
+	presentMode   gpu.PresentMode
 	backbuffer    gpu.Handle
 }
 
@@ -241,11 +243,18 @@ func (b *Backend) createBackbufferLocked(width, height uint32, format gpu.Format
 // surfaceFormats is what this backend's pretend surfaces present.
 var surfaceFormats = []gpu.Format{gpu.FormatBGRA8Unorm, gpu.FormatBGRA8Srgb}
 
-func (b *Backend) SwapchainFormats(surface uintptr) []gpu.Format {
+func (b *Backend) CreateSurface(target gpu.SurfaceTarget) (gpu.Surface, error) {
+	if target == nil {
+		return 0, errors.New("gpu/test: nil surface target")
+	}
+	return 1, nil
+}
+
+func (b *Backend) SwapchainFormats(surface gpu.Surface) []gpu.Format {
 	return slices.Clone(surfaceFormats)
 }
 
-func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
+func (b *Backend) CreateSwapchain(surface gpu.Surface, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
 	format := desc.Format
 	if format == gpu.FormatUndefined {
 		format = gpu.FormatBGRA8Unorm
@@ -258,10 +267,11 @@ func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor)
 	defer b.mu.Unlock()
 	h := b.newHandleLocked()
 	b.swapchains[h] = &swapchainState{
-		width:      desc.Width,
-		height:     desc.Height,
-		format:     format,
-		backbuffer: b.createBackbufferLocked(desc.Width, desc.Height, format),
+		width:       desc.Width,
+		height:      desc.Height,
+		format:      format,
+		presentMode: desc.PresentMode,
+		backbuffer:  b.createBackbufferLocked(desc.Width, desc.Height, format),
 	}
 	return gpu.Swapchain{H: h}, nil
 }
@@ -276,6 +286,22 @@ func (b *Backend) ResizeSwapchain(sc gpu.Swapchain, width, height uint32) {
 	delete(b.textures, st.backbuffer)
 	st.width, st.height = width, height
 	st.backbuffer = b.createBackbufferLocked(width, height, st.format)
+}
+
+// SetPresentMode records mode; there is no display for it to change anything on.
+func (b *Backend) SetPresentMode(sc gpu.Swapchain, mode gpu.PresentMode) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if st, ok := b.swapchains[sc.H]; ok {
+		st.presentMode = mode
+	}
+}
+
+// PresentMode is the mode the swapchain presents in, as created or last set.
+func (b *Backend) PresentMode(sc gpu.Swapchain) gpu.PresentMode {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.swapchains[sc.H].presentMode
 }
 
 func (b *Backend) AcquireNext(sc gpu.Swapchain) (gpu.Texture, gpu.Fence) {

@@ -115,6 +115,41 @@ func (s Swapchain) IsValid() bool {
 	return s.H != 0
 }
 
+// Surface is a backend-specific presentation surface created from a native
+// window or view.
+type Surface uintptr
+
+// IsValid reports whether the surface has a native backend handle.
+func (s Surface) IsValid() bool {
+	return s != 0
+}
+
+// SurfaceTarget is a native drawable that a Backend can turn into a Surface.
+// UI packages implement this interface without needing to know which GPU API
+// will consume the target.
+type SurfaceTarget interface {
+	NativeSurface() NativeSurface
+}
+
+// NativeSurface describes the platform object underlying a SurfaceTarget.
+// Display is used by window systems such as X11 and is zero otherwise.
+type NativeSurface struct {
+	Kind    NativeSurfaceKind
+	Handle  uintptr
+	Display uintptr
+}
+
+// NativeSurfaceKind identifies the native window-system object in a target.
+type NativeSurfaceKind uint8
+
+const (
+	NativeSurfaceUnknown NativeSurfaceKind = iota
+	NativeSurfaceCocoaWindow
+	NativeSurfaceCocoaView
+	NativeSurfaceWin32Window
+	NativeSurfaceXlibWindow
+)
+
 // SwapchainDescriptor describes a window's presentation chain.
 type SwapchainDescriptor struct {
 	Width, Height uint32
@@ -123,7 +158,29 @@ type SwapchainDescriptor struct {
 	// as it stores, and decodes it to blend. FormatUndefined picks the backend's
 	// default, an 8-bit unorm format.
 	Format Format
+	// PresentMode is when a presented frame reaches the display; the zero value waits
+	// for its refresh.
+	PresentMode PresentMode
 }
+
+// PresentMode is when a presented frame reaches the display.
+type PresentMode uint8
+
+const (
+	// PresentVSync shows each frame at the display's next refresh, never tearing. A
+	// frame that finishes early waits, which also paces rendering to the refresh rate.
+	PresentVSync PresentMode = iota
+	// PresentImmediate shows each frame as soon as it is presented, without waiting for
+	// a refresh: frames run as fast as the GPU can draw them, and may tear. Where the
+	// display cannot show a frame mid-refresh, the backend falls back to
+	// PresentMailbox, and failing that, to PresentVSync.
+	PresentImmediate
+	// PresentMailbox shows, at each refresh, the newest frame finished by then, never
+	// tearing: frames run as fast as the GPU can draw them, and those a newer one
+	// overtakes before a refresh are never shown. Where the backend has no such mode —
+	// Metal has none — it falls back to PresentVSync.
+	PresentMailbox
+)
 
 // Fence is a submission completion token.
 type Fence struct{ H Handle }
@@ -416,8 +473,10 @@ type TextureDescriptor struct {
 	Usage         TextureUsage
 	// Samples is how many samples each pixel holds (MSAA); 0 and 1 both mean one. A
 	// multisampled texture is a 2D render target or depth buffer with one mip. It cannot
-	// be sampled or copied: a render pass resolves it into a single-sample texture (see
-	// ColorAttachment.ResolveTexture), and that is what gets read.
+	// be filtered or copied. A render pass can resolve it into a single-sample texture
+	// (see ColorAttachment.ResolveTexture); or, with TextureSampled usage, a shader reads
+	// its samples one at a time, by texelFetch through the heap declared as
+	// texture2DMS (texture2d_ms on Metal) — at the same index as any other texture.
 	Samples uint8
 	Label   string
 }
@@ -582,17 +641,20 @@ type Backend interface {
 	CreateGraphicsPipeline(PipelineDescriptor) Pipeline
 	DestroyPipeline(Pipeline)
 
-	// Presentation. surface is a platform window handle (e.g. CAMetalLayer /
-	// HWND / xcb) the backend wraps in a VkSurface. It is an opaque uintptr so the
-	// interface stays free of unsafe; backends reinterpret it as needed.
+	// Presentation. A Surface is created from a native SurfaceTarget, then used
+	// to query formats and create a swapchain.
+	CreateSurface(target SurfaceTarget) (Surface, error)
 	// SwapchainFormats lists the backbuffer formats the surface can present, for
 	// SwapchainDescriptor.Format.
-	SwapchainFormats(surface uintptr) []Format
+	SwapchainFormats(surface Surface) []Format
 	// CreateSwapchain fails when desc.Format is not one of SwapchainFormats.
-	CreateSwapchain(surface uintptr, desc SwapchainDescriptor) (Swapchain, error)
+	CreateSwapchain(surface Surface, desc SwapchainDescriptor) (Swapchain, error)
 	// ResizeSwapchain recreates the backbuffers at a new size, keeping the rest of the
 	// swapchain's descriptor.
 	ResizeSwapchain(sc Swapchain, width, height uint32)
+	// SetPresentMode changes when the swapchain's frames reach the display, keeping the
+	// rest of its descriptor. It waits for the GPU to go idle first.
+	SetPresentMode(sc Swapchain, mode PresentMode)
 	// AcquireNext returns the next backbuffer as a render-target Texture plus a
 	// fence that signals when it's safe to reuse.
 	AcquireNext(sc Swapchain) (Texture, Fence)

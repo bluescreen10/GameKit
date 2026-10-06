@@ -670,7 +670,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
  VkResult vkbCreateCreateGraphicsPipeline(VkDevice dev, VkPipelineLayout layout,
         const void* vs, size_t vsBytes, const void* fs, size_t fsBytes, const char* entry,
         VkPrimitiveTopology topo, const VkFormat* colorFmts, uint32_t nColor,
-        VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, int blendMode,
+        VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, const VkPipelineColorBlendAttachmentState* blends,
         int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples, VkPipeline* out) {
     VkShaderModule vmod, fmod = VK_NULL_HANDLE;
     VkResult r = vkbShaderModule(dev, (const uint32_t*)vs, vsBytes, &vmod);
@@ -720,31 +720,11 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     ds.depthWriteEnable = depthWrite ? VK_TRUE : VK_FALSE;
     ds.depthCompareOp = depthCompare;
 
-    // blendMode: 0 = opaque, 1 = src-alpha over, 2 = additive.
-    VkPipelineColorBlendAttachmentState atts[8] = {0};
-    for (uint32_t i = 0; i < nColor && i < 8; i++) {
-        atts[i].colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        if (blendMode == 0) {
-            atts[i].blendEnable = VK_FALSE;
-        } else {
-            atts[i].blendEnable = VK_TRUE;
-            atts[i].colorBlendOp = VK_BLEND_OP_ADD;
-            atts[i].alphaBlendOp = VK_BLEND_OP_ADD;
-            atts[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            atts[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            if (blendMode == 1) { // src-alpha over
-                atts[i].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-                atts[i].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            } else { // additive
-                atts[i].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-                atts[i].dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
-            }
-        }
-    }
+    // blends holds one state per colour attachment, built from gpu.BlendState.
     VkPipelineColorBlendStateCreateInfo cb = {0};
     cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     cb.attachmentCount = nColor;
-    cb.pAttachments = atts;
+    cb.pAttachments = blends;
 
     VkDynamicState dyn[3] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_DEPTH_BIAS };
     VkPipelineDynamicStateCreateInfo dsi = {0};
@@ -826,6 +806,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 // the Go side free of a vet-flagged uintptr->unsafe.Pointer conversion; the value
 // is a real Vulkan handle, never Go memory.
  VkSurfaceKHR vkbSurfaceFromHandle(uint64_t h) { return (VkSurfaceKHR)h; }
+ uint64_t vkbSurfaceHandle(VkSurfaceKHR surface) { return (uint64_t)surface; }
 
 // vkbSurfaceFormats writes up to max of the formats the surface presents in the sRGB
 // colour space into out, and returns how many it wrote. Other colour spaces (HDR10,
@@ -845,11 +826,40 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     return n;
 }
 
-// vkbCreateSwapchain creates (or recreates from old) a FIFO swapchain of the given
-// format, in the sRGB colour space — the caller picks it from vkbSurfaceFormats.
-// Returns the swapchain and extent.
+// vkbPresentMode is the present mode a swapchain asking for wanted gets: wanted, if the
+// surface offers it; for IMMEDIATE, MAILBOX — which replaces the waiting frame rather
+// than tearing — if it offers that instead; and otherwise FIFO, which every surface
+// offers.
+static VkPresentModeKHR vkbPresentMode(VkPhysicalDevice phys, VkSurfaceKHR surface, VkPresentModeKHR wanted) {
+    if (wanted == VK_PRESENT_MODE_FIFO_KHR) {
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+    uint32_t n = 0;
+    vkGetPhysicalDeviceSurfacePresentModesKHR(phys, surface, &n, NULL);
+    VkPresentModeKHR* modes = malloc(n * sizeof(VkPresentModeKHR));
+    vkGetPhysicalDeviceSurfacePresentModesKHR(phys, surface, &n, modes);
+    int offersWanted = 0;
+    int offersMailbox = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        offersWanted |= modes[i] == wanted;
+        offersMailbox |= modes[i] == VK_PRESENT_MODE_MAILBOX_KHR;
+    }
+    free(modes);
+    if (offersWanted) {
+        return wanted;
+    }
+    if (wanted == VK_PRESENT_MODE_IMMEDIATE_KHR && offersMailbox) {
+        return VK_PRESENT_MODE_MAILBOX_KHR;
+    }
+    return VK_PRESENT_MODE_FIFO_KHR;
+}
+
+// vkbCreateSwapchain creates (or recreates from old) a swapchain of the given format,
+// in the sRGB colour space — the caller picks it from vkbSurfaceFormats — presenting in
+// presentMode, or the nearest the surface offers (see vkbPresentMode). Returns the
+// swapchain and extent.
  VkResult vkbCreateSwapchain(VkPhysicalDevice phys, VkDevice dev, VkSurfaceKHR surface,
-                                   uint32_t w, uint32_t h, VkFormat format, VkSwapchainKHR old,
+                                   uint32_t w, uint32_t h, VkFormat format, VkPresentModeKHR presentMode, VkSwapchainKHR old,
                                    VkSwapchainKHR* outSwap, uint32_t* outW, uint32_t* outH) {
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps);
@@ -884,7 +894,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     ci.preTransform = caps.currentTransform;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    ci.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    ci.presentMode = vkbPresentMode(phys, surface, presentMode);
     ci.clipped = VK_TRUE;
     ci.oldSwapchain = old;
 

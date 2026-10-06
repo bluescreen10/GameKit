@@ -17,6 +17,7 @@ type swapchainState struct {
 	swap     C.VkSwapchainKHR
 	format   C.VkFormat
 	gpuFmt   gpu.Format
+	mode     gpu.PresentMode
 	w, h     uint32
 	images   []gpu.Texture // one textureEntry per image (owned=false)
 	acquire  []C.VkSemaphore
@@ -27,7 +28,7 @@ type swapchainState struct {
 
 // SwapchainFormats lists the formats the surface presents in the sRGB colour space,
 // restricted to those the RHI can name.
-func (b *Backend) SwapchainFormats(surface uintptr) []gpu.Format {
+func (b *Backend) SwapchainFormats(surface gpu.Surface) []gpu.Format {
 	var native [64]C.VkFormat
 	n := C.vkbSurfaceFormats(b.physicalDevice, C.vkbSurfaceFromHandle(C.uint64_t(surface)), &native[0], C.uint32_t(len(native)))
 	var formats []gpu.Format
@@ -43,7 +44,7 @@ func (b *Backend) SwapchainFormats(surface uintptr) []gpu.Format {
 
 // CreateSwapchain wraps a platform VkSurfaceKHR in a swapchain, surfacing
 // backbuffers as render-target Textures.
-func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
+func (b *Backend) CreateSwapchain(surface gpu.Surface, desc gpu.SwapchainDescriptor) (gpu.Swapchain, error) {
 	available := b.SwapchainFormats(surface)
 	format := desc.Format
 	if format == gpu.FormatUndefined {
@@ -53,7 +54,7 @@ func (b *Backend) CreateSwapchain(surface uintptr, desc gpu.SwapchainDescriptor)
 		return gpu.Swapchain{}, fmt.Errorf("vulkan: the surface does not present swapchain format %v (it offers %v)", format, available)
 	}
 
-	s := &swapchainState{surface: C.vkbSurfaceFromHandle(C.uint64_t(surface)), gpuFmt: format, format: vkFormat(format)}
+	s := &swapchainState{surface: C.vkbSurfaceFromHandle(C.uint64_t(surface)), gpuFmt: format, format: vkFormat(format), mode: desc.PresentMode}
 	b.buildSwapchain(s, desc.Width, desc.Height, nil)
 
 	h := b.nextID.Add(1)
@@ -78,7 +79,7 @@ func defaultSwapchainFormat(available []gpu.Format) gpu.Format {
 func (b *Backend) buildSwapchain(s *swapchainState, width, height uint32, old C.VkSwapchainKHR) {
 	var swap C.VkSwapchainKHR
 	var w, h C.uint32_t
-	if r := C.vkbCreateSwapchain(b.physicalDevice, b.device, s.surface, C.uint32_t(width), C.uint32_t(height), s.format, old,
+	if r := C.vkbCreateSwapchain(b.physicalDevice, b.device, s.surface, C.uint32_t(width), C.uint32_t(height), s.format, vkPresentMode(s.mode), old,
 		&swap, &w, &h); r != C.VK_SUCCESS {
 		panic(fmt.Sprintf("vulkan: swapchain creation failed (%d)", int(r)))
 	}
@@ -163,6 +164,30 @@ func (b *Backend) ResizeSwapchain(sc gpu.Swapchain, width, height uint32) {
 	C.vkDeviceWaitIdle(b.device)
 	b.destroySwapchainResources(s)
 	b.buildSwapchain(s, width, height, s.swap)
+}
+
+// vkPresentMode is the Vulkan present mode a swapchain presenting in mode asks for.
+func vkPresentMode(mode gpu.PresentMode) C.VkPresentModeKHR {
+	switch mode {
+	case gpu.PresentImmediate:
+		return C.VK_PRESENT_MODE_IMMEDIATE_KHR
+	case gpu.PresentMailbox:
+		return C.VK_PRESENT_MODE_MAILBOX_KHR
+	default:
+		return C.VK_PRESENT_MODE_FIFO_KHR
+	}
+}
+
+// SetPresentMode recreates the swapchain presenting in mode, at its current size.
+func (b *Backend) SetPresentMode(sc gpu.Swapchain, mode gpu.PresentMode) {
+	s := b.swapchains[uint64(sc.H)]
+	if s.mode == mode {
+		return
+	}
+	C.vkDeviceWaitIdle(b.device)
+	s.mode = mode
+	b.destroySwapchainResources(s)
+	b.buildSwapchain(s, s.w, s.h, s.swap)
 }
 
 func (b *Backend) destroySwapchainResources(s *swapchainState) {
