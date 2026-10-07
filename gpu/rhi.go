@@ -572,8 +572,7 @@ type PipelineDescriptor struct {
 	Blend        []BlendState // per color target; nil => opaque
 
 	// Constants sets the shaders' specialization constants, as for a compute pipeline.
-	// It specializes both stages: each constant must be declared by at least one of
-	// them, and the other ignores it.
+	// It specializes both stages: a stage ignores any constant it does not declare.
 	Constants map[string]float64
 
 	Label string
@@ -583,18 +582,20 @@ type ComputePipelineDescriptor struct {
 	Shader []byte
 	Entry  string // empty => backend default (Vulkan: "main", Metal: "main0")
 	// Constants sets the shader's specialization constants as the pipeline is created —
-	// `layout(constant_id = N) const` in GLSL, `[[function_constant(N)]]` in Metal — as
-	// WebGPU's pipeline constants do. The value is fixed for the pipeline's lifetime, so
+	// `layout(constant_id = N) const` in GLSL, `[[function_constant(N)]]` in Metal — much
+	// as WebGPU's pipeline constants do. The value is fixed for the pipeline's lifetime, so
 	// the compiler folds it and drops the branches it rules out: one shader source serves
 	// several pipelines, each paying only for the work it keeps. A constant left out
-	// keeps the default its shader declares.
+	// keeps the default its shader declares. Unlike WebGPU, a constant the shader does
+	// not declare is ignored rather than an error — so one set of constants can serve every pipeline a pass creates, whether
+	// or not each shader uses them.
 	//
 	// A key is the constant's name in the shader, or its ID in decimal ("3"). A name
 	// needs the shader compiled with its debug names, which an optimizing compile (glslc
 	// -O) strips; an ID works either way. A value is converted to the type the constant
 	// is declared with: a bool is whether it is non-zero, an int or uint must be a whole
 	// number in the type's range, and a float is rounded to 32 bits. Creating the
-	// pipeline panics for a key no stage declares, or a value its type cannot hold.
+	// pipeline panics for a value its constant's type cannot hold.
 	Constants map[string]float64
 	Label     string
 }
@@ -643,7 +644,11 @@ type DepthAttachment struct {
 // creation is immediate; there are no descriptor sets or pipeline layouts to
 // manage — resources are reached through addresses and the bindless heap.
 type Backend interface {
-	Init() error // This obtains the device, setup queues, etc.
+	// Init obtains the device, its queues and the bindless heap. A backend is one
+	// instance per process (see Instance), shared by everything that uses it: each Init
+	// adds a user, which a Destroy removes, and the device lives until the last one is
+	// gone. Only the first Init does any work.
+	Init() error
 	// SupportedFormats lists the Format values this backend can create textures
 	// with (a subset of the full Format catalog above). Query it before choosing
 	// a format for an asset pipeline or render target that must run on every

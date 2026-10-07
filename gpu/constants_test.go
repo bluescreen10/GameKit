@@ -84,16 +84,24 @@ func TestComputeConstantsPartial(t *testing.T) {
 	}
 }
 
-// TestComputeConstantsRejected: a constant the shader does not declare, or a value its
-// type cannot hold, makes creating the pipeline panic, naming the constant.
+// TestComputeConstantsIgnoresUndeclared: a constant the shader does not declare, by
+// name or by ID, is ignored, and the ones it does declare still take effect.
+func TestComputeConstantsIgnoresUndeclared(t *testing.T) {
+	got := readComputeConstants(t, map[string]float64{"MISSING": 1, "9": 1, "COUNT": 9})
+	want := shaderConstants{enabled: 0, offset: -3, count: 9, scale: 0.5}
+	if got != want {
+		t.Errorf("constants = %+v, want %+v", got, want)
+	}
+}
+
+// TestComputeConstantsRejected: a value its constant's type cannot hold makes creating
+// the pipeline panic, naming the constant.
 func TestComputeConstantsRejected(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		constants map[string]float64
 		key       string
 	}{
-		{"undeclared name", map[string]float64{"SCALE": 1, "MISSING": 1}, "MISSING"},
-		{"undeclared ID", map[string]float64{"9": 1}, "9"},
 		{"negative uint", map[string]float64{"COUNT": -1}, "COUNT"},
 		{"fractional int", map[string]float64{"OFFSET": 1.5}, "OFFSET"},
 		{"int out of range", map[string]float64{"OFFSET": 1 << 31}, "OFFSET"},

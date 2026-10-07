@@ -37,16 +37,16 @@ type Value struct {
 }
 
 // Resolve matches each constant to the declaration of it, by name or by ID in decimal,
-// in any of the stages, and converts its value to the declared type. It fails for a
-// constant no stage declares, and for one whose value its type cannot hold. Stages that
+// in any of the stages, and converts its value to the declared type. A constant no stage
+// declares is left out, and one whose value its type cannot hold fails. Stages that
 // declare the same ID agree on its type, as one shader source compiled per stage does.
 func Resolve(constants map[string]float64, stages ...[]Declaration) ([]Value, error) {
-	// In key order, so that of several bad constants the same one is reported each time.
+	// In key order, so that of several bad values the same one is reported each time.
 	var values []Value
 	for _, key := range slices.Sorted(maps.Keys(constants)) {
 		declaration, ok := find(key, stages)
 		if !ok {
-			return nil, fmt.Errorf("no shader stage declares constant %q", key)
+			continue
 		}
 		bits, err := convert(constants[key], declaration.Type)
 		if err != nil {

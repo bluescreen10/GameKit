@@ -30,6 +30,8 @@ import (
 // creation/destruction must be externally serialized. Wait before freeing resources.
 type Backend struct {
 	native unsafe.Pointer
+	// users is how many Inits have no Destroy yet: the device lives while any do.
+	users int
 
 	// swapchainFormats is each swapchain's backbuffer format, as created.
 	swapchainMu      sync.Mutex
@@ -117,6 +119,7 @@ func cstr(s string) (*C.char, func()) {
 
 func (b *Backend) Init() error {
 	if b.native != nil {
+		b.users++
 		return nil
 	}
 	b.native = C.mbCreate()
@@ -127,10 +130,17 @@ func (b *Backend) Init() error {
 		b.native = nil
 		return fmt.Errorf("metal: %s", msg)
 	}
+	b.users = 1
 	return nil
 }
 
+// Destroy removes a user (see gpu.Backend.Init), and with the last releases the device.
 func (b *Backend) Destroy() {
+	if b.users > 1 {
+		b.users--
+		return
+	}
+	b.users = 0
 	if b.native != nil {
 		b.WaitIdle()
 		result(C.mbDestroy(b.native))

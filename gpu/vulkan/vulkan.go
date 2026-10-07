@@ -34,6 +34,9 @@ var _ gpu.Backend = (*Backend)(nil)
 // Backend is the Vulkan implementation of gpu.Backend. Only device init is wired
 // so far; memory/bindless/pipelines/swapchain/commands land in sibling files.
 type Backend struct {
+	// users is how many Inits have no Destroy yet: the device lives while any do.
+	users int
+
 	instance C.VkInstance
 	// maxAnisotropy is the device's maxSamplerAnisotropy limit, cached at Init so
 	// CreateSampler can clamp to it — callers ask for the quality they want and
@@ -107,6 +110,7 @@ func New(instanceExtensions ...string) *Backend {
 func (b *Backend) Init() error {
 	//TODO: prefer the use of pinner.Pin() instead of C.malloc / C.free
 	if b.device != nil {
+		b.users++
 		return nil
 	}
 	instanceExtensions := b.instanceExts
@@ -157,11 +161,18 @@ func (b *Backend) Init() error {
 		C.vkDestroyInstance(b.instance, nil)
 		return err
 	}
+	b.users = 1
 	return nil
 }
 
-// Destroy releases the device and instance.
+// Destroy removes a user (see gpu.Backend.Init), and with the last releases the device
+// and instance.
 func (b *Backend) Destroy() {
+	if b.users > 1 {
+		b.users--
+		return
+	}
+	b.users = 0
 	if b.device != nil {
 		C.vkDeviceWaitIdle(b.device)
 		for _, p := range b.pipelines {
