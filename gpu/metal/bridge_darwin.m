@@ -307,6 +307,9 @@ static uint64_t rootSlot(MBDevice *b,MBCommand *c,const void *data,uint32_t size
 // load-preserving reopen still applies — MTL4 changes how work inside the pass is
 // bound and synchronized, not the attachment lifecycle.
 static void pauseRender(MBDevice *b,MBCommand *c) {
+ // A memoryless attachment cannot be stored for the resumed encoder to load.
+ for(NSUInteger i=0;i<8;i++) require(c.pass.colorAttachments[i].texture.storageMode!=MTLStorageModeMemoryless,@"a barrier cannot split a render pass with a transient attachment");
+ require(c.pass.depthAttachment.texture.storageMode!=MTLStorageModeMemoryless,@"a barrier cannot split a render pass with a transient attachment");
  for(NSUInteger i=0;i<8;i++) if(c.pass.colorAttachments[i].texture) [c.render setColorStoreAction:MTLStoreActionStore atIndex:i];
  if(c.pass.depthAttachment.texture) [c.render setDepthStoreAction:MTLStoreActionStore];
  [c.render updateFence:b.fence afterEncoderStages:kRenderStages];
@@ -403,7 +406,8 @@ static NSString *entryName(const void *s) {
  NSString *e=str(s);
  return e.length ? e : @"main0";
 }
-static MTL4LibraryFunctionDescriptor *libraryFunction(MBDevice *b,const void *data,NSUInteger size,const void *entry) {
+// shaderLibrary loads a metallib, or compiles MSL source.
+static id<MTLLibrary> shaderLibrary(MBDevice *b,const void *data,NSUInteger size) {
  require(data && size,@"empty shader"); NSError *error=nil; id<MTLLibrary> library=nil;
  if(size>=4 && !memcmp(data,"MTLB",4)) {
   dispatch_data_t bytes=dispatch_data_create(data,size,NULL,DISPATCH_DATA_DESTRUCTOR_DEFAULT);
@@ -416,8 +420,29 @@ static MTL4LibraryFunctionDescriptor *libraryFunction(MBDevice *b,const void *da
   library=[b.device newLibraryWithSource:source options:options error:&error]; [options release]; [source release];
  }
  require(library!=nil,error.localizedDescription ?: @"shader compilation failed");
+ return [library autorelease];
+}
+static MTL4LibraryFunctionDescriptor *libraryFunction(MBDevice *b,const void *data,NSUInteger size,const void *entry) {
  MTL4LibraryFunctionDescriptor *fd=[MTL4LibraryFunctionDescriptor new];
- fd.library=library; fd.name=entryName(entry); [library release];
+ fd.library=shaderLibrary(b,data,size); fd.name=entryName(entry);
+ return [fd autorelease];
+}
+// specializedFunction fixes a function's constants (see gpu.Constant). A function
+// constant left unset keeps the default its shader declares. It specializes even when
+// count is 0: Metal refuses to build a pipeline from a function that declares function
+// constants and was never specialized, however every one of them has a default.
+static MTL4FunctionDescriptor *specializedFunction(MTL4LibraryFunctionDescriptor *function,const MBConstant *constants,uint32_t count) {
+ static const MTLDataType types[]={MTLDataTypeBool,MTLDataTypeInt,MTLDataTypeUInt,MTLDataTypeFloat};
+ MTLFunctionConstantValues *values=[MTLFunctionConstantValues new];
+ for(uint32_t i=0;i<count;i++) {
+  require(constants[i].type<4,@"invalid constant type");
+  // A Metal bool is one byte; the other types take all 32 bits.
+  bool flag=constants[i].bits!=0;
+  const void *value=constants[i].type==0?(const void *)&flag:(const void *)&constants[i].bits;
+  [values setConstantValue:value type:types[constants[i].type] atIndex:constants[i].id];
+ }
+ MTL4SpecializedFunctionDescriptor *fd=[MTL4SpecializedFunctionDescriptor new];
+ fd.functionDescriptor=function; fd.constantValues=values; [values release];
  return [fd autorelease];
 }
 static void completed(MBDevice *b,uint64_t value) {
@@ -596,6 +621,12 @@ MBResult mbCreateTexture(void *backend,uint32_t kind,uint32_t width,uint32_t hei
   if(usage&1) d.usage|=MTLTextureUsageShaderRead;
   if(usage&2) d.usage|=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite;
   if(usage&12) d.usage|=MTLTextureUsageRenderTarget;
+  // gpu.TextureTransient: in tile memory alone, on the GPUs that have it.
+  if(usage&32) {
+   require(!(usage&(1|2|16)),@"a transient texture cannot be sampled, written by shaders or copied");
+   d.usage=MTLTextureUsageRenderTarget;
+   if([b.device supportsFamily:MTLGPUFamilyApple1]) d.storageMode=MTLStorageModeMemoryless;
+  }
   id<MTLTexture> t=[b.device newTextureWithDescriptor:d]; [d release]; t.label=str(label);
   uint64_t h=add(b,t,2); [t release]; uint64_t index=(usage&3)?slot(b,resource(b,h,2),NO):0; return mbSuccess(h,index);
  } MB_END
@@ -619,10 +650,37 @@ MBResult mbCreateSampler(void *backend,uint32_t minLinear,uint32_t magLinear,uin
  } MB_END
 }
 
+// mbFunctionConstants lists the function constants a shader's entry declares, up to
+// capacity of them into out, and returns how many it declares. Their names are as the
+// library has them: SPIRV-Cross gives a GLSL constant X the function constant X_tmp.
+MBResult mbFunctionConstants(void *backend,const void *shader,uint64_t size,const char *entry,MBFunctionConstant *out,uint32_t capacity) { MB_BEGIN(backend,0) {
+  id<MTLFunction> function=[shaderLibrary(b,shader,size) newFunctionWithName:entryName(entry)];
+  require(function!=nil,@"shader has no such entry point");
+  NSDictionary<NSString *,MTLFunctionConstant *> *constants=function.functionConstantsDictionary;
+  uint32_t count=0;
+  for(MTLFunctionConstant *c in constants.allValues) {
+   if(count<capacity) {
+    MBFunctionConstant *f=&out[count];
+    switch(c.type) {
+     case MTLDataTypeBool: f->type=0; break;
+     case MTLDataTypeInt: f->type=1; break;
+     case MTLDataTypeUInt: f->type=2; break;
+     case MTLDataTypeFloat: f->type=3; break;
+     default: [function release]; require(NO,[NSString stringWithFormat:@"function constant %@ is not a bool, int, uint or float",c.name]);
+    }
+    f->index=(uint32_t)c.index;
+    strlcpy(f->name,c.name.UTF8String,sizeof(f->name));
+   }
+   count++;
+  }
+  [function release]; return mbSuccess(count,0);
+ } MB_END
+}
+
 MBResult mbCreateComputePipeline(void *backend,const MBComputePipelineDesc *v) { MB_BEGIN(backend,0) {
   require(v!=NULL,@"nil compute pipeline descriptor");
   MTL4ComputePipelineDescriptor *d=[MTL4ComputePipelineDescriptor new];
-  d.computeFunctionDescriptor=libraryFunction(b,v->shader,v->shaderSize,v->entry);
+  d.computeFunctionDescriptor=specializedFunction(libraryFunction(b,v->shader,v->shaderSize,v->entry),v->constants,v->constantCount);
   d.options=[MTL4PipelineOptions new]; d.options.shaderReflection=MTL4ShaderReflectionBindingInfo; [d.options release];
   NSError *error=nil;
   id<MTLComputePipelineState> ps=[b.compiler newComputePipelineStateWithDescriptor:d compilerTaskOptions:nil error:&error]; [d release];
@@ -637,7 +695,9 @@ MBResult mbCreateComputePipeline(void *backend,const MBComputePipelineDesc *v) {
 MBResult mbCreateGraphicsPipeline(void *backend,const MBGraphicsPipelineDesc *v) { MB_BEGIN(backend,0) {
   require(v!=NULL && v->colorCount<=8,@"invalid graphics pipeline descriptor");
   MTL4RenderPipelineDescriptor *d=[MTL4RenderPipelineDescriptor new];
-  d.vertexFunctionDescriptor=libraryFunction(b,v->vertexShader,v->vertexShaderSize,v->vertexEntry); if(v->fragmentShaderSize) d.fragmentFunctionDescriptor=libraryFunction(b,v->fragmentShader,v->fragmentShaderSize,v->fragmentEntry);
+  // Both stages share one set of constants, as on Vulkan; a stage ignores any it does not declare.
+  d.vertexFunctionDescriptor=specializedFunction(libraryFunction(b,v->vertexShader,v->vertexShaderSize,v->vertexEntry),v->constants,v->constantCount);
+  if(v->fragmentShaderSize) d.fragmentFunctionDescriptor=specializedFunction(libraryFunction(b,v->fragmentShader,v->fragmentShaderSize,v->fragmentEntry),v->constants,v->constantCount);
   d.rasterSampleCount=MAX(v->samples,1);
   d.options=[MTL4PipelineOptions new]; d.options.shaderReflection=MTL4ShaderReflectionBindingInfo; [d.options release];
   static const MTLBlendFactor factors[]={MTLBlendFactorZero,MTLBlendFactorOne,MTLBlendFactorSourceAlpha,MTLBlendFactorOneMinusSourceAlpha,MTLBlendFactorDestinationAlpha,MTLBlendFactorOneMinusDestinationAlpha};

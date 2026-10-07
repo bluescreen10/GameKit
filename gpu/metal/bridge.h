@@ -17,6 +17,22 @@ typedef struct {
     uint32_t error;
 } MBPointerResult;
 
+// MBConstant sets one function constant: type is a specialization.Type, bits the
+// value's 32 bits.
+typedef struct {
+    uint32_t id;
+    uint32_t type;
+    uint32_t bits;
+} MBConstant;
+
+// MBFunctionConstant is a function constant a shader declares: type is a
+// specialization.Type.
+typedef struct {
+    uint32_t index;
+    uint32_t type;
+    char name[128];
+} MBFunctionConstant;
+
 typedef struct {
     const void *shader;
     uint64_t shaderSize;
@@ -25,6 +41,8 @@ typedef struct {
     uint32_t groupX;
     uint32_t groupY;
     uint32_t groupZ;
+    const MBConstant *constants;
+    uint32_t constantCount;
 } MBComputePipelineDesc;
 
 typedef struct {
@@ -45,6 +63,8 @@ typedef struct {
     uint32_t colorCount;
     uint32_t colorFormats[8];
     uint64_t blend[8];
+    const MBConstant *constants;
+    uint32_t constantCount;
 } MBGraphicsPipelineDesc;
 
 typedef struct {
@@ -79,6 +99,7 @@ MBResult mbCreateSampler(void *backend, uint32_t minLinear,
     uint32_t magLinear, uint32_t mipLinear, uint32_t addressU,
     uint32_t addressV, uint32_t addressW, uint32_t compare,
     uint32_t maxAnisotropy, const char *label);
+MBResult mbFunctionConstants(void *backend, const void *shader, uint64_t size, const char *entry, MBFunctionConstant *out, uint32_t capacity);
 MBResult mbCreateComputePipeline(void *backend, const MBComputePipelineDesc *desc);
 MBResult mbCreateGraphicsPipeline(void *backend, const MBGraphicsPipelineDesc *desc);
 

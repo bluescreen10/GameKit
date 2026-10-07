@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/gpu/internal/specialization"
 )
 
 func topology(t gpu.Topology) C.VkPrimitiveTopology {
@@ -44,9 +45,14 @@ func (b *Backend) CreateComputePipeline(desc gpu.ComputePipelineDescriptor) gpu.
 	}
 	cEntry := C.CString(desc.Entry)
 	defer C.free(unsafe.Pointer(cEntry))
+	constants, err := resolveConstants(desc.Constants, desc.Shader)
+	if err != nil {
+		panic(fmt.Sprintf("vulkan: CreateComputePipeline(%q): %v", desc.Label, err))
+	}
 	var p C.VkPipeline
 	r := C.vkbCreateComputePipeline(b.device, b.pipelineLayout,
-		unsafe.Pointer(&desc.Shader[0]), C.size_t(len(desc.Shader)), cEntry, &p)
+		unsafe.Pointer(&desc.Shader[0]), C.size_t(len(desc.Shader)), cEntry,
+		constants.idsPtr(), constants.bitsPtr(), C.uint32_t(len(constants.ids)), &p)
 	if r != C.VK_SUCCESS {
 		panic(fmt.Sprintf("vulkan: CreateComputePipeline(%q) failed (%d)", desc.Label, int(r)))
 	}
@@ -111,17 +117,75 @@ func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline 
 		fragPtr = unsafe.Pointer(&d.FragmentShader[0])
 	}
 
+	constants, err := resolveConstants(d.Constants, d.VertexShader, d.FragmentShader)
+	if err != nil {
+		panic(fmt.Sprintf("vulkan: CreateGraphicsPipeline(%q): %v", d.Label, err))
+	}
 	var p C.VkPipeline
 	r := C.vkbCreateCreateGraphicsPipeline(b.device, b.pipelineLayout,
 		unsafe.Pointer(&d.VertexShader[0]), C.size_t(len(d.VertexShader)),
 		fragPtr, C.size_t(len(d.FragmentShader)), cEntry,
 		topology(d.Topology), colorPtr, C.uint32_t(len(d.ColorFormats)),
 		vkFormat(d.DepthFormat), cullMode(d.CullMode), frontFaceCW, blendsPtr,
-		depthTest, depthWrite, compareOp(d.DepthCompare), C.uint32_t(samples), &p)
+		depthTest, depthWrite, compareOp(d.DepthCompare), C.uint32_t(samples),
+		constants.idsPtr(), constants.bitsPtr(), C.uint32_t(len(constants.ids)), &p)
 	if r != C.VK_SUCCESS {
 		panic(fmt.Sprintf("vulkan: CreateGraphicsPipeline(%q) failed (%d)", d.Label, int(r)))
 	}
 	return b.registerPipeline(p, C.VK_PIPELINE_BIND_POINT_GRAPHICS)
+}
+
+// specializationConstants is a pipeline's constants as the bridge takes them: ids[i]
+// takes the 32 bits bits[i]. Vulkan reads every constant as 4 bytes whatever its type,
+// so the type is not passed on.
+type specializationConstants struct {
+	ids  []C.uint32_t
+	bits []C.uint32_t
+}
+
+// resolveConstants resolves a descriptor's constants against what the shaders declare.
+// A constant only one stage declares is passed to both, and the other ignores it.
+func resolveConstants(constants map[string]float64, shaders ...[]byte) (specializationConstants, error) {
+	var resolved specializationConstants
+	if len(constants) == 0 {
+		return resolved, nil
+	}
+	var stages [][]specialization.Declaration
+	for _, code := range shaders {
+		if len(code) == 0 {
+			continue
+		}
+		declared, err := specConstants(code)
+		if err != nil {
+			return resolved, err
+		}
+		stages = append(stages, declared)
+	}
+	values, err := specialization.Resolve(constants, stages...)
+	if err != nil {
+		return resolved, err
+	}
+	for _, v := range values {
+		resolved.ids = append(resolved.ids, C.uint32_t(v.ID))
+		resolved.bits = append(resolved.bits, C.uint32_t(v.Bits))
+	}
+	return resolved, nil
+}
+
+// idsPtr and bitsPtr are nil when there are no constants, which keeps cgo from
+// indexing an empty slice.
+func (s specializationConstants) idsPtr() *C.uint32_t {
+	if len(s.ids) == 0 {
+		return nil
+	}
+	return &s.ids[0]
+}
+
+func (s specializationConstants) bitsPtr() *C.uint32_t {
+	if len(s.bits) == 0 {
+		return nil
+	}
+	return &s.bits[0]
 }
 
 // blendAttachment translates a target's blend state. WriteMask 0 means every channel,

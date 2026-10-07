@@ -1,4 +1,5 @@
 #include "bridge.h"
+#include <stdlib.h>
 #include <string.h>
 
 // Instance and device.
@@ -474,8 +475,8 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
 // colour, sample zero's for depth, the one depth resolve every device supports. Every
 // attachment is in VK_IMAGE_LAYOUT_GENERAL, as every image is.
  void vkbBeginRendering(VkCommandBuffer cb, uint32_t w, uint32_t h,
-                              const VkImageView* colors, const VkImageView* colorResolves, const int* loads, const float* clears, uint32_t nColor,
-                              int hasDepth, VkImageView depth, VkImageView depthResolve, int depthClear, float dclear) {
+                              const VkImageView* colors, const VkImageView* colorResolves, const int* loads, const int* transients, const float* clears, uint32_t nColor,
+                              int hasDepth, VkImageView depth, VkImageView depthResolve, int depthClear, int depthTransient, float dclear) {
     VkRenderingAttachmentInfo cis[4] = {0};
     for (uint32_t i = 0; i < nColor; i++) {
         cis[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -486,8 +487,10 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
             cis[i].resolveImageView = colorResolves[i];
             cis[i].resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
         }
-        cis[i].loadOp = loads[i] ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-        cis[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        // A transient attachment is never loaded or stored (gpu.TextureTransient): with
+        // lazily allocated memory, either would make the device give it some.
+        cis[i].loadOp = loads[i] ? VK_ATTACHMENT_LOAD_OP_CLEAR : transients[i] ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_LOAD;
+        cis[i].storeOp = transients[i] ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
         cis[i].clearValue.color.float32[0] = clears[i * 4 + 0];
         cis[i].clearValue.color.float32[1] = clears[i * 4 + 1];
         cis[i].clearValue.color.float32[2] = clears[i * 4 + 2];
@@ -503,8 +506,8 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
         di.resolveImageView = depthResolve;
         di.resolveImageLayout = VK_IMAGE_LAYOUT_GENERAL;
     }
-    di.loadOp = depthClear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-    di.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    di.loadOp = depthClear ? VK_ATTACHMENT_LOAD_OP_CLEAR : depthTransient ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_LOAD;
+    di.storeOp = depthTransient ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
     di.clearValue.depthStencil.depth = dclear;
 
     VkRenderingInfo ri = {0};
@@ -639,11 +642,37 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     return vkCreateShaderModule(dev, &ci, NULL, out);
 }
 
+// specialization describes a pipeline's specialization constants to Vulkan: constant
+// ids[i] takes the 32 bits bits[i]. Every constant is 4 bytes, VkBool32 included. The
+// entries are allocated, and released with freeSpecialization; count 0 allocates none.
+static VkSpecializationInfo specialization(const uint32_t* ids, const uint32_t* bits, uint32_t count) {
+    VkSpecializationInfo info = {0};
+    if (count == 0) return info;
+    VkSpecializationMapEntry* entries = calloc(count, sizeof(VkSpecializationMapEntry));
+    for (uint32_t i = 0; i < count; i++) {
+        entries[i].constantID = ids[i];
+        entries[i].offset = i * sizeof(uint32_t);
+        entries[i].size = sizeof(uint32_t);
+    }
+    info.mapEntryCount = count;
+    info.pMapEntries = entries;
+    info.dataSize = count * sizeof(uint32_t);
+    info.pData = bits;
+    return info;
+}
+
+static void freeSpecialization(VkSpecializationInfo* info) {
+    free((void*)info->pMapEntries);
+}
+
  VkResult vkbCreateComputePipeline(VkDevice dev, VkPipelineLayout layout,
-                                         const void* code, size_t bytes, const char* entry, VkPipeline* out) {
+                                         const void* code, size_t bytes, const char* entry,
+                                         const uint32_t* constantIDs, const uint32_t* constantBits, uint32_t constantCount,
+                                         VkPipeline* out) {
     VkShaderModule mod;
     VkResult r = vkbShaderModule(dev, (const uint32_t*)code, bytes, &mod);
     if (r != VK_SUCCESS) return r;
+    VkSpecializationInfo spec = specialization(constantIDs, constantBits, constantCount);
 
     VkComputePipelineCreateInfo ci = {0};
     ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -652,9 +681,11 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     ci.stage.module = mod;
     ci.stage.pName = entry;
+    ci.stage.pSpecializationInfo = &spec;
 
     r = vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &ci, NULL, out);
     vkDestroyShaderModule(dev, mod, NULL);
+    freeSpecialization(&spec);
     return r;
 }
 
@@ -671,7 +702,8 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
         const void* vs, size_t vsBytes, const void* fs, size_t fsBytes, const char* entry,
         VkPrimitiveTopology topo, const VkFormat* colorFmts, uint32_t nColor,
         VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, const VkPipelineColorBlendAttachmentState* blends,
-        int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples, VkPipeline* out) {
+        int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples,
+        const uint32_t* constantIDs, const uint32_t* constantBits, uint32_t constantCount, VkPipeline* out) {
     VkShaderModule vmod, fmod = VK_NULL_HANDLE;
     VkResult r = vkbShaderModule(dev, (const uint32_t*)vs, vsBytes, &vmod);
     if (r != VK_SUCCESS) return r;
@@ -687,6 +719,10 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vmod; stages[0].pName = entry;
     stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fmod; stages[1].pName = entry;
+    // Both stages share one set of constants; a stage ignores any it does not declare.
+    VkSpecializationInfo spec = specialization(constantIDs, constantBits, constantCount);
+    stages[0].pSpecializationInfo = &spec;
+    stages[1].pSpecializationInfo = &spec;
 
     VkPipelineVertexInputStateCreateInfo vin = {0};
     vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -755,6 +791,7 @@ static uint32_t vkbMin3(uint32_t a, uint32_t b, uint32_t c) {
     r = vkCreateGraphicsPipelines(dev, VK_NULL_HANDLE, 1, &ci, NULL, out);
     vkDestroyShaderModule(dev, vmod, NULL);
     if (fmod != VK_NULL_HANDLE) vkDestroyShaderModule(dev, fmod, NULL);
+    freeSpecialization(&spec);
     return r;
 }
 
@@ -1023,7 +1060,15 @@ static VkPresentModeKHR vkbPresentMode(VkPhysicalDevice phys, VkSurfaceKHR surfa
     VkPhysicalDeviceMemoryProperties mp;
     vkGetPhysicalDeviceMemoryProperties(phys, &mp);
     uint32_t ti = 0xFFFFFFFF;
-    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+    // A transient attachment takes lazily allocated memory where the device has it —
+    // tile-based GPUs, which then never commit any — and device-local memory otherwise.
+    if (usage & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT) {
+        for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+            if ((req.memoryTypeBits & (1u << i)) &&
+                (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)) { ti = i; break; }
+        }
+    }
+    for (uint32_t i = 0; ti == 0xFFFFFFFF && i < mp.memoryTypeCount; i++) {
         if ((req.memoryTypeBits & (1u << i)) &&
             (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) { ti = i; break; }
     }

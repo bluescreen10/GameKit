@@ -18,10 +18,12 @@ import (
 	"fmt"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"unsafe"
 
 	"github.com/bluescreen10/gamekit/gpu"
+	"github.com/bluescreen10/gamekit/gpu/internal/specialization"
 )
 
 // Backend owns one device and serial queue. Like command recording, resource
@@ -32,6 +34,12 @@ type Backend struct {
 	// swapchainFormats is each swapchain's backbuffer format, as created.
 	swapchainMu      sync.Mutex
 	swapchainFormats map[gpu.Handle]gpu.Format
+
+	// transients holds the textures created with gpu.TextureTransient, which a render
+	// pass may only clear or not care about, and never store — checked on every device,
+	// memoryless or not, so that misuse fails alike everywhere.
+	transientMu sync.Mutex
+	transients  map[gpu.Handle]bool
 }
 
 var _ gpu.Backend = (*Backend)(nil)
@@ -148,7 +156,22 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	defer done()
 	r := C.mbCreateTexture(b.native, C.uint32_t(d.Kind), C.uint32_t(d.Width), C.uint32_t(d.Height), C.uint32_t(d.Depth), C.uint32_t(d.Layers), C.uint32_t(d.Mips), C.uint32_t(d.Format), C.uint32_t(d.Usage), C.uint32_t(d.Samples), p)
 	h := result(r)
+	if d.Usage&gpu.TextureTransient != 0 {
+		b.transientMu.Lock()
+		if b.transients == nil {
+			b.transients = make(map[gpu.Handle]bool)
+		}
+		b.transients[gpu.Handle(h)] = true
+		b.transientMu.Unlock()
+	}
 	return gpu.Texture{H: gpu.Handle(h), Index: uint32(r.auxiliary)}
+}
+
+// isTransient reports whether t was created with gpu.TextureTransient.
+func (b *Backend) isTransient(t gpu.Texture) bool {
+	b.transientMu.Lock()
+	defer b.transientMu.Unlock()
+	return b.transients[t.H]
 }
 
 func (b *Backend) TextureView(t gpu.Texture, k gpu.TextureKind, m, n, l, c uint32) gpu.Texture {
@@ -162,6 +185,9 @@ func (b *Backend) release(h gpu.Handle) {
 }
 
 func (b *Backend) DestroyTexture(t gpu.Texture) {
+	b.transientMu.Lock()
+	delete(b.transients, t.H)
+	b.transientMu.Unlock()
 	b.release(t.H)
 }
 
@@ -231,10 +257,19 @@ func (b *Backend) CreateComputePipeline(d gpu.ComputePipelineDescriptor) gpu.Pip
 		groupY:     C.uint32_t(group[1]),
 		groupZ:     C.uint32_t(group[2]),
 	}
+	constants, err := b.resolveConstants(d.Constants, stageShader{code: d.Shader, entry: d.Entry})
+	if err != nil {
+		panic(fmt.Sprintf("metal: CreateComputePipeline(%q): %v", d.Label, err))
+	}
 	var pins runtime.Pinner
+	defer pins.Unpin()
 	if desc.shader != nil {
 		pins.Pin(desc.shader)
-		defer pins.Unpin()
+	}
+	if len(constants) > 0 {
+		desc.constants = &constants[0]
+		desc.constantCount = C.uint32_t(len(constants))
+		pins.Pin(desc.constants)
 	}
 	return gpu.Pipeline{H: gpu.Handle(result(C.mbCreateComputePipeline(b.native, &desc)))}
 }
@@ -287,6 +322,12 @@ func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline 
 		}
 		desc.blend[i] = C.uint64_t(flag(x.Enable) | uint64(mask)<<1 | uint64(x.ColorOp.Src)<<5 | uint64(x.ColorOp.Dst)<<9 | uint64(x.ColorOp.Op)<<13 | uint64(x.AlphaOp.Src)<<17 | uint64(x.AlphaOp.Dst)<<21 | uint64(x.AlphaOp.Op)<<25)
 	}
+	constants, err := b.resolveConstants(d.Constants,
+		stageShader{code: d.VertexShader, entry: d.VertexEntry},
+		stageShader{code: d.FragmentShader, entry: d.FragmentEntry})
+	if err != nil {
+		panic(fmt.Sprintf("metal: CreateGraphicsPipeline(%q): %v", d.Label, err))
+	}
 	var pins runtime.Pinner
 	if desc.vertexShader != nil {
 		pins.Pin(desc.vertexShader)
@@ -294,9 +335,80 @@ func (b *Backend) CreateGraphicsPipeline(d gpu.PipelineDescriptor) gpu.Pipeline 
 	if desc.fragmentShader != nil {
 		pins.Pin(desc.fragmentShader)
 	}
+	if len(constants) > 0 {
+		desc.constants = &constants[0]
+		desc.constantCount = C.uint32_t(len(constants))
+		pins.Pin(desc.constants)
+	}
 	defer pins.Unpin()
 	return gpu.Pipeline{H: gpu.Handle(result(C.mbCreateGraphicsPipeline(b.native, &desc)))}
 }
+
+// stageShader is one stage's shader, as resolveConstants reads it.
+type stageShader struct {
+	code  []byte
+	entry string
+}
+
+// resolveConstants resolves a descriptor's constants against the function constants
+// the stages declare. A constant only one stage declares is passed to both, and the
+// other ignores it.
+func (b *Backend) resolveConstants(constants map[string]float64, stages ...stageShader) ([]C.MBConstant, error) {
+	if len(constants) == 0 {
+		return nil, nil
+	}
+	var declarations [][]specialization.Declaration
+	for _, stage := range stages {
+		if len(stage.code) > 0 {
+			declarations = append(declarations, b.functionConstants(stage))
+		}
+	}
+	values, err := specialization.Resolve(constants, declarations...)
+	if err != nil {
+		return nil, err
+	}
+	var resolved []C.MBConstant
+	for _, v := range values {
+		resolved = append(resolved, C.MBConstant{id: C.uint32_t(v.ID), _type: C.uint32_t(v.Type), bits: C.uint32_t(v.Bits)})
+	}
+	return resolved, nil
+}
+
+// functionConstants lists the function constants a stage's entry declares, named as
+// its GLSL source names them: SPIRV-Cross gives a constant X the function constant
+// X_tmp.
+func (b *Backend) functionConstants(stage stageShader) []specialization.Declaration {
+	entryName, done := cstr(entry(stage.entry))
+	defer done()
+	var pins runtime.Pinner
+	pins.Pin(&stage.code[0])
+	defer pins.Unpin()
+
+	var constants []C.MBFunctionConstant
+	for {
+		var out *C.MBFunctionConstant
+		if len(constants) > 0 {
+			out = &constants[0]
+		}
+		count := int(result(C.mbFunctionConstants(b.native, shader(stage.code), C.uint64_t(len(stage.code)), entryName, out, C.uint32_t(len(constants)))))
+		if count <= len(constants) {
+			constants = constants[:count]
+			break
+		}
+		constants = make([]C.MBFunctionConstant, count)
+	}
+
+	var declarations []specialization.Declaration
+	for _, c := range constants {
+		declarations = append(declarations, specialization.Declaration{
+			ID:   uint32(c.index),
+			Name: strings.TrimSuffix(C.GoString(&c.name[0]), "_tmp"),
+			Type: specialization.Type(c._type),
+		})
+	}
+	return declarations
+}
+
 func (b *Backend) DestroyPipeline(p gpu.Pipeline) {
 	b.release(p.H)
 }
@@ -429,6 +541,12 @@ func (c *command) BeginRenderPass(r gpu.RenderTargets) {
 	if len(r.Color) > 8 {
 		panic("metal: at most 8 color targets")
 	}
+	for _, x := range r.Color {
+		c.b.checkTransientAttachment(x.Texture, x.Load, x.Store)
+	}
+	if r.Depth != nil {
+		c.b.checkTransientAttachment(r.Depth.Texture, r.Depth.Load, r.Depth.Store)
+	}
 	var d C.MBRenderDesc
 	d.colorCount = C.uint32_t(len(r.Color))
 	for i, x := range r.Color {
@@ -451,6 +569,18 @@ func (c *command) BeginRenderPass(r gpu.RenderTargets) {
 	}
 	result(C.mbBeginRenderPass(c.b.native, C.uint64_t(c.h), &d))
 }
+
+// checkTransientAttachment panics if t is transient and a pass would load or store it
+// (see gpu.TextureTransient).
+func (b *Backend) checkTransientAttachment(t gpu.Texture, load gpu.LoadOp, store gpu.StoreOp) {
+	if !b.isTransient(t) {
+		return
+	}
+	if load == gpu.LoadKeep || store == gpu.StoreKeep {
+		panic("metal: BeginRenderPass: a transient attachment can only be cleared or not cared about, and never stored")
+	}
+}
+
 func (c *command) EndRenderPass() {
 	c.ready()
 	result(C.mbEndRenderPass(c.b.native, C.uint64_t(c.h)))

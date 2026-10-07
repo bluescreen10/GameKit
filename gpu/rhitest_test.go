@@ -51,6 +51,12 @@ var (
 	readSamples []byte
 	//go:embed testdata/tint.frag.spv
 	tintFrag []byte
+	//go:embed testdata/constants.comp.spv
+	constantsComp []byte
+	//go:embed testdata/constants.vert.spv
+	constantsVert []byte
+	//go:embed testdata/constants.frag.spv
+	constantsFrag []byte
 )
 
 var (
@@ -92,6 +98,9 @@ func testBackend(t *testing.T) gpu.Backend {
 			sampled3DFrag = variant("sampled3d.frag")
 			readSamples = variant("read_samples.comp")
 			tintFrag = variant("tint.frag")
+			constantsComp = variant("constants.comp")
+			constantsVert = variant("constants.vert")
+			constantsFrag = variant("constants.frag")
 		}
 		backendErr = backendInst.Init()
 	})

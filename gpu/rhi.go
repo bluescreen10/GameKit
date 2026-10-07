@@ -348,6 +348,15 @@ const (
 	TextureRenderTarget                          // color attachment
 	TextureDepth                                 // depth/stencil attachment
 	TextureTransfer                              // copy src/dst
+	// TextureTransient marks an attachment that lives only within a render pass: each
+	// pass using it clears it or does not care what it held (LoadClear or LoadDontCare),
+	// and keeps nothing of it (StoreDontCare) — though a multisampled one may resolve
+	// as the pass ends. It cannot be sampled, written by shaders or copied, and no
+	// Barrier may split a pass it is bound to. In return a tile-based GPU never gives
+	// it memory: Metal makes it memoryless on Apple GPUs, Vulkan backs it with lazily
+	// allocated memory where the device has some. Elsewhere it is an ordinary
+	// attachment that the same rules apply to.
+	TextureTransient
 )
 
 // TextureKind selects the view dimension.
@@ -562,13 +571,32 @@ type PipelineDescriptor struct {
 	DepthCompare CompareOp
 	Blend        []BlendState // per color target; nil => opaque
 
+	// Constants sets the shaders' specialization constants, as for a compute pipeline.
+	// It specializes both stages: each constant must be declared by at least one of
+	// them, and the other ignores it.
+	Constants map[string]float64
+
 	Label string
 }
 
 type ComputePipelineDescriptor struct {
 	Shader []byte
 	Entry  string // empty => backend default (Vulkan: "main", Metal: "main0")
-	Label  string
+	// Constants sets the shader's specialization constants as the pipeline is created —
+	// `layout(constant_id = N) const` in GLSL, `[[function_constant(N)]]` in Metal — as
+	// WebGPU's pipeline constants do. The value is fixed for the pipeline's lifetime, so
+	// the compiler folds it and drops the branches it rules out: one shader source serves
+	// several pipelines, each paying only for the work it keeps. A constant left out
+	// keeps the default its shader declares.
+	//
+	// A key is the constant's name in the shader, or its ID in decimal ("3"). A name
+	// needs the shader compiled with its debug names, which an optimizing compile (glslc
+	// -O) strips; an ID works either way. A value is converted to the type the constant
+	// is declared with: a bool is whether it is non-zero, an int or uint must be a whole
+	// number in the type's range, and a float is rounded to 32 bits. Creating the
+	// pipeline panics for a key no stage declares, or a value its type cannot hold.
+	Constants map[string]float64
+	Label     string
 }
 
 // RenderTargets is the dynamic-rendering attachment set for BeginRenderPass.

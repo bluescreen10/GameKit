@@ -98,8 +98,8 @@ void vkbGlobalBarrier(VkCommandBuffer cb, VkPipelineStageFlags2 srcStage, VkAcce
                              VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess);
 
 void vkbBeginRendering(VkCommandBuffer cb, uint32_t w, uint32_t h,
-                              const VkImageView* colors, const VkImageView* colorResolves, const int* loads, const float* clears, uint32_t nColor,
-                              int hasDepth, VkImageView depth, VkImageView depthResolve, int depthClear, float dclear);
+                              const VkImageView* colors, const VkImageView* colorResolves, const int* loads, const int* transients, const float* clears, uint32_t nColor,
+                              int hasDepth, VkImageView depth, VkImageView depthResolve, int depthClear, int depthTransient, float dclear);
 
 void vkbCopyImageToBuffer(VkCommandBuffer cb, VkImage img, VkBuffer buf, uint32_t w, uint32_t h, uint32_t d,
                                  uint32_t mip, uint32_t layer, VkImageAspectFlags aspect);
@@ -117,13 +117,16 @@ void vkbFreeBuffer(VkDevice dev, VkBuffer buf, VkDeviceMemory mem);
 VkResult vkbShaderModule(VkDevice dev, const uint32_t* code, size_t bytes, VkShaderModule* out);
 
 VkResult vkbCreateComputePipeline(VkDevice dev, VkPipelineLayout layout,
-                                         const void* code, size_t bytes, const char* entry, VkPipeline* out);
+                                         const void* code, size_t bytes, const char* entry,
+                                         const uint32_t* constantIDs, const uint32_t* constantBits, uint32_t constantCount,
+                                         VkPipeline* out);
 
 VkResult vkbCreateCreateGraphicsPipeline(VkDevice dev, VkPipelineLayout layout,
         const void* vs, size_t vsBytes, const void* fs, size_t fsBytes, const char* entry,
         VkPrimitiveTopology topo, const VkFormat* colorFmts, uint32_t nColor,
         VkFormat depthFmt, VkCullModeFlags cull, int frontFaceCW, const VkPipelineColorBlendAttachmentState* blends,
-        int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples, VkPipeline* out);
+        int depthTest, int depthWrite, VkCompareOp depthCompare, uint32_t samples,
+        const uint32_t* constantIDs, const uint32_t* constantBits, uint32_t constantCount, VkPipeline* out);
 
 VkQueryPool vkbCreateTimestampPool(VkDevice dev, uint32_t count);
 

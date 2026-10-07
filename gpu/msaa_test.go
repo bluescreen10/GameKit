@@ -277,3 +277,82 @@ func TestMultisampledTexturesReadPerSample(t *testing.T) {
 	}
 	t.Logf("%d pixels hold both covered and uncovered samples", partial)
 }
+
+// TestTransientMultisampleResolve draws a white triangle at depth 0 into 4x colour and
+// depth that are transient — they live only within the pass, in tile memory on GPUs
+// that have it — and resolves both as the pass ends. The resolves must be what they are
+// for stored images: the triangle's edges partly covered, black around it, and each
+// pixel's sample zero depth.
+func TestTransientMultisampleResolve(t *testing.T) {
+	b := testBackend(t)
+
+	color := b.CreateTexture(gpu.TextureDescriptor{
+		Kind: gpu.Texture2D, Width: msaaSize, Height: msaaSize, Format: gpu.FormatRGBA8Unorm,
+		Usage: gpu.TextureRenderTarget | gpu.TextureTransient, Samples: msaaSamples, Label: "transient-color",
+	})
+	depth := b.CreateTexture(gpu.TextureDescriptor{
+		Kind: gpu.Texture2D, Width: msaaSize, Height: msaaSize, Format: gpu.FormatDepth32F,
+		Usage: gpu.TextureDepth | gpu.TextureTransient, Samples: msaaSamples, Label: "transient-depth",
+	})
+	resolvedColor := b.CreateTexture(gpu.TextureDescriptor{
+		Kind: gpu.Texture2D, Width: msaaSize, Height: msaaSize, Format: gpu.FormatRGBA8Unorm,
+		Usage: gpu.TextureRenderTarget | gpu.TextureTransfer, Label: "resolved-color",
+	})
+	resolvedDepth := b.CreateTexture(gpu.TextureDescriptor{
+		Kind: gpu.Texture2D, Width: msaaSize, Height: msaaSize, Format: gpu.FormatDepth32F,
+		Usage: gpu.TextureDepth | gpu.TextureTransfer, Label: "resolved-depth",
+	})
+	pipeline := b.CreateGraphicsPipeline(gpu.PipelineDescriptor{
+		VertexShader: triangleVert, FragmentShader: triangleFrag,
+		Topology: gpu.TopologyTriangles, ColorFormats: []gpu.Format{gpu.FormatRGBA8Unorm},
+		DepthFormat: gpu.FormatDepth32F, DepthTest: true, DepthWrite: true, DepthCompare: gpu.CompareAlways,
+		Samples: msaaSamples, CullMode: gpu.CullNone, Label: "transient-triangle",
+	})
+	rootAddr := whiteTriangleRoot(b)
+	colorReadback := b.Alloc(msaaSize*msaaSize*4, gpu.MemoryHost, "color-readback")
+	depthReadback := b.Alloc(msaaSize*msaaSize*4, gpu.MemoryHost, "depth-readback")
+
+	cmd := b.Begin()
+	cmd.BeginRenderPass(gpu.RenderTargets{
+		Color: []gpu.ColorAttachment{{
+			Texture: color, Load: gpu.LoadClear, Store: gpu.StoreDontCare,
+			Clear: [4]float32{0, 0, 0, 1}, ResolveTexture: resolvedColor,
+		}},
+		Depth: &gpu.DepthAttachment{
+			Texture: depth, Load: gpu.LoadClear, Store: gpu.StoreDontCare, Clear: 1,
+			ResolveTexture: resolvedDepth,
+		},
+	})
+	cmd.SetPipeline(pipeline)
+	cmd.SetViewport(0, 0, msaaSize, msaaSize, 0, 1)
+	cmd.SetScissor(0, 0, msaaSize, msaaSize)
+	cmd.Draw(utils.ToBytes(&rootAddr), 3, 1, 0, 0)
+	cmd.EndRenderPass()
+	cmd.Barrier(gpu.StageColorOutput|gpu.StageDepth, gpu.StageTransfer, 0)
+	cmd.CopyTextureToBuffer(colorReadback, resolvedColor, 0, 0)
+	cmd.CopyTextureToBuffer(depthReadback, resolvedDepth, 0, 0)
+	b.Wait(b.Submit(cmd))
+
+	pixels := unsafe.Slice((*byte)(colorReadback.Ptr), msaaSize*msaaSize*4)
+	var black, white, partial int
+	for i := 0; i < len(pixels); i += 4 {
+		switch red := pixels[i]; red {
+		case 0:
+			black++
+		case 255:
+			white++
+		default:
+			partial++
+		}
+	}
+	if black == 0 || white == 0 || partial == 0 {
+		t.Errorf("resolved colour has %d black, %d white, %d partly covered pixels, want some of each", black, white, partial)
+	}
+	depths := unsafe.Slice((*float32)(depthReadback.Ptr), msaaSize*msaaSize)
+	if got := depths[1*msaaSize+msaaSize-2]; got != 1 {
+		t.Errorf("resolved depth at the empty corner = %v, want the clear depth 1", got)
+	}
+	if got := depths[(msaaSize/2)*msaaSize+msaaSize/2-4]; got != 0 {
+		t.Errorf("resolved depth inside the triangle = %v, want the triangle's depth 0", got)
+	}
+}

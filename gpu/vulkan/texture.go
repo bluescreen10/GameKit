@@ -28,6 +28,9 @@ type textureEntry struct {
 	// writable says the image has storage usage, so a view of one of its mips can be
 	// written as a storage image.
 	writable bool
+	// transient says the image was created with gpu.TextureTransient: a pass may only
+	// clear it or not care what it held, and never stores it.
+	transient bool
 	// swapchain-owned backbuffers set owned=false so Destroy skips image/mem.
 	owned bool
 }
@@ -63,6 +66,12 @@ func imageUsage(u gpu.TextureUsage, depth bool) C.VkImageUsageFlags {
 	}
 	if u&gpu.TextureTransfer != 0 {
 		f |= C.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | C.VK_IMAGE_USAGE_TRANSFER_DST_BIT
+	}
+	if u&gpu.TextureTransient != 0 {
+		if u&(gpu.TextureSampled|gpu.TextureStorage|gpu.TextureTransfer) != 0 {
+			panic("vulkan: a transient texture cannot be sampled, written by shaders or copied")
+		}
+		f |= C.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT
 	}
 	return f
 }
@@ -104,7 +113,7 @@ func (b *Backend) CreateTexture(d gpu.TextureDescriptor) gpu.Texture {
 	b.textures[h] = &textureEntry{
 		img: img, mem: mem, view: view, format: vkFormat(d.Format),
 		width: d.Width, height: d.Height, depth: depth, isDepthFormat: isDepth,
-		writable: d.Usage&gpu.TextureStorage != 0, owned: true,
+		writable: d.Usage&gpu.TextureStorage != 0, transient: d.Usage&gpu.TextureTransient != 0, owned: true,
 	}
 	b.uninitialized = append(b.uninitialized, h)
 

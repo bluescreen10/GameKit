@@ -161,11 +161,16 @@ func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 	var views [maxColorAttachments]C.VkImageView
 	var resolveViews [maxColorAttachments]C.VkImageView
 	var loads [maxColorAttachments]C.int
+	var transients [maxColorAttachments]C.int
 	var clears [maxColorAttachments * 4]C.float
 	for i, ca := range rt.Color {
 		e := c.b.tex(ca.Texture)
 		w, h = e.width, e.height
 		views[i] = e.view
+		if e.transient {
+			checkTransientAttachment(ca.Load, ca.Store)
+			transients[i] = 1
+		}
 		if ca.ResolveTexture.IsValid() {
 			if ca.Store != gpu.StoreDontCare {
 				panic("vulkan: BeginRenderPass: a resolved color attachment cannot also store its samples")
@@ -183,11 +188,16 @@ func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 	var depthView, depthResolveView C.VkImageView
 	hasDepth := C.int(0)
 	depthClear := C.int(0)
+	depthTransient := C.int(0)
 	var dclear float32
 	if rt.Depth != nil {
 		e := c.b.tex(rt.Depth.Texture)
 		w, h = e.width, e.height
 		depthView = e.view
+		if e.transient {
+			checkTransientAttachment(rt.Depth.Load, rt.Depth.Store)
+			depthTransient = 1
+		}
 		if rt.Depth.ResolveTexture.IsValid() {
 			if rt.Depth.Store != gpu.StoreDontCare {
 				panic("vulkan: BeginRenderPass: a resolved depth attachment cannot also store its samples")
@@ -203,15 +213,23 @@ func (c *cmdBuffer) BeginRenderPass(rt gpu.RenderTargets) {
 		// depth-test against the image while also sampling it.
 	}
 	var viewsPtr, resolveViewsPtr *C.VkImageView
-	var loadsPtr *C.int
+	var loadsPtr, transientsPtr *C.int
 	var clearsPtr *C.float
 	if n := len(rt.Color); n > 0 {
-		viewsPtr, resolveViewsPtr, loadsPtr, clearsPtr = &views[0], &resolveViews[0], &loads[0], &clears[0]
+		viewsPtr, resolveViewsPtr, loadsPtr, transientsPtr, clearsPtr = &views[0], &resolveViews[0], &loads[0], &transients[0], &clears[0]
 	}
 	C.vkbBeginRendering(c.cb, C.uint32_t(w), C.uint32_t(h),
-		viewsPtr, resolveViewsPtr, loadsPtr, clearsPtr, C.uint32_t(len(rt.Color)),
-		hasDepth, depthView, depthResolveView, depthClear, C.float(dclear))
+		viewsPtr, resolveViewsPtr, loadsPtr, transientsPtr, clearsPtr, C.uint32_t(len(rt.Color)),
+		hasDepth, depthView, depthResolveView, depthClear, depthTransient, C.float(dclear))
 	c.inRenderPass = true
+}
+
+// checkTransientAttachment panics if a pass would load or store a transient attachment
+// (see gpu.TextureTransient).
+func checkTransientAttachment(load gpu.LoadOp, store gpu.StoreOp) {
+	if load == gpu.LoadKeep || store == gpu.StoreKeep {
+		panic("vulkan: BeginRenderPass: a transient attachment can only be cleared or not cared about, and never stored")
+	}
 }
 
 func (c *cmdBuffer) EndRenderPass() {
